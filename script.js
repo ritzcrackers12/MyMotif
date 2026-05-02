@@ -585,13 +585,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     let srcUrl = e.target.result;
                     if (auth.currentUser) {
                         // Upload to Firebase Storage
-                        const imageRef = ref(storage, \`images/\${auth.currentUser.uid}/\${Date.now()}_\${Math.floor(Math.random()*1000)}\`);
+                        const imageRef = ref(storage, `images/${auth.currentUser.uid}/${Date.now()}_${Math.floor(Math.random()*1000)}`);
                         await uploadString(imageRef, e.target.result, 'data_url');
                         srcUrl = await getDownloadURL(imageRef);
                     }
                     
                     imgNode.innerHTML = `
-                        <img src="\${srcUrl}">
+                        <img src="${srcUrl}">
                         <div class="image-resize-handle"></div>
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
