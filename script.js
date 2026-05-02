@@ -1,4 +1,4 @@
-import { auth, db, storage, provider, signInWithPopup, onAuthStateChanged, signOut, doc, setDoc, getDoc, ref, uploadString, getDownloadURL } from './firebase.js';
+import { auth, db, storage, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc, ref, uploadString, getDownloadURL } from './firebase.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     const boardContainer = document.getElementById('board-container');
@@ -711,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- FIREBASE LOGIN LOGIC ---
-    const googleLoginBtn = document.querySelector('.google-login-btn');
+    const googleLoginBtns = document.querySelectorAll('.google-login-btn');
     const userIconBtn = document.querySelector('.login-trigger');
     const saveCloudBtn = document.getElementById('save-cloud-btn');
     
@@ -795,13 +795,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
                 saveStateSafe(); // reset history
             }
-    // Google Sign In
-    googleLoginBtn.addEventListener('click', async () => {
-        try {
-            await signInWithPopup(auth, provider);
-        } catch (error) {
-            console.error("Error signing in with Google: ", error);
-            alert("Failed to sign in. Please try again.");
-        }
+    // Google Sign In / Sign Up
+    googleLoginBtns.forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Redirecting...';
+            try {
+                await signInWithRedirect(auth, provider);
+            } catch (error) {
+                console.error("Error signing in with Google: ", error);
+                alert("Failed to sign in. Please try again.");
+                btn.innerHTML = '<i class="fa-brands fa-google"></i> Sign Up with Google';
+            }
+        });
     });
 });
