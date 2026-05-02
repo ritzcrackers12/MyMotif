@@ -1,6 +1,6 @@
 import { auth, db, storage, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc, ref, uploadString, getDownloadURL } from './firebase.js';
 
-document.addEventListener('DOMContentLoaded', () => {
+const initApp = () => {
     const boardContainer = document.getElementById('board-container');
     const canvas = document.getElementById('canvas');
     const ghostFrame = document.getElementById('ghost-frame');
@@ -795,6 +795,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
                 saveStateSafe(); // reset history
             }
+        }
+    });
+
     // Google Sign In / Sign Up
     googleLoginBtns.forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -809,4 +812,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
-});
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
+}
