@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motif - Visual AI Analysis</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="light-theme">
+    <!-- Auth Overlay -->
+    <div id="auth-overlay" class="glass-overlay hidden">
+        <div class="auth-modal white-panel">
+            <h2>Welcome to Motif</h2>
+            <p>Sign in to access your infinite canvas</p>
+            <button id="login-btn" class="primary-btn"><i class="fa-brands fa-google"></i> Sign in with Google</button>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <header class="top-toolbar white-panel">
+        <div class="logo">Motif</div>
+        <div class="divider-vertical"></div>
+        <div class="tools">
+            <button class="tool-btn active" data-tool="select" title="Select Tool (V)"><i class="fa-solid fa-arrow-pointer"></i></button>
+            <button class="tool-btn" data-tool="pan" title="Pan Tool (Space + Drag)"><i class="fa-solid fa-hand"></i></button>
+            <div class="divider-vertical"></div>
+            <button class="tool-btn" data-tool="board" title="Draw Board (B)"><i class="fa-solid fa-layer-group"></i> Board</button>
+            <button class="tool-btn" data-tool="frame" title="Draw Frame (F)"><i class="fa-regular fa-square-plus"></i> Frame</button>
+        </div>
+        <div class="divider-vertical"></div>
+        <div class="user-actions">
+            <button class="icon-btn" id="save-cloud-btn" title="Save to Cloud" style="display: none;"><i class="fa-solid fa-cloud-arrow-up"></i></button>
+            <button class="icon-btn login-trigger" title="Log In"><i class="fa-solid fa-user"></i></button>
+        </div>
+    </header>
+
+    <div class="app-container">
+        <!-- Canvas Area -->
+        <main id="board-container">
+            <div id="canvas">
+                <div id="ghost-frame"></div>
+                <!-- Frames injected here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Hidden global file input for adding images to frames -->
+    <input type="file" multiple accept="image/*" style="display: none;" id="global-file-input">
+
+    <script type="module" src="script.js"></script>
+</body>
+</html>
