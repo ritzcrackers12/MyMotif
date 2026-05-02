@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('canvas');
     const ghostFrame = document.getElementById('ghost-frame');
     const globalFileInput = document.getElementById('global-file-input');
-    const authOverlay = document.getElementById('auth-overlay');
+    const landingPage = document.getElementById('landing-page');
     
     let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
     let scale = 1;
@@ -711,14 +711,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- FIREBASE LOGIN LOGIC ---
-    const googleLoginBtn = document.querySelector('.auth-modal .primary-btn');
+    const googleLoginBtn = document.querySelector('.google-login-btn');
     const userIconBtn = document.querySelector('.login-trigger');
     const saveCloudBtn = document.getElementById('save-cloud-btn');
     
     // Auth State Observer
     onAuthStateChanged(auth, async (user) => {
         if (user) {
-            authOverlay.classList.add('hidden');
+            landingPage.classList.add('hidden');
             
             userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
             userIconBtn.title = `Logged in as ${user.displayName} (Click to Sign Out)`;
@@ -747,6 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
             userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
             userIconBtn.title = "Log In";
             saveCloudBtn.style.display = 'none';
+            landingPage.classList.remove('hidden');
         }
     });
 
@@ -794,23 +795,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
                 saveStateSafe(); // reset history
             }
-        } else {
-            authOverlay.classList.remove('hidden');
-        }
-    });
-
-    // Google Sign In (Modal)
+    // Google Sign In
     googleLoginBtn.addEventListener('click', async () => {
         try {
             await signInWithPopup(auth, provider);
-            // onAuthStateChanged will handle the UI update
         } catch (error) {
             console.error("Error signing in with Google: ", error);
             alert("Failed to sign in. Please try again.");
         }
-    });
-
-    authOverlay.addEventListener('click', (e) => {
-        if (e.target === authOverlay) authOverlay.classList.add('hidden');
     });
 });

@@ -541,3 +541,73 @@ h1, h2, h3, h4, h5, h6 {
     transition: background 0.2s;
 }
 .primary-btn:hover { background: #000; }
+
+/* --- LANDING PAGE --- */
+.landing-page {
+    position: fixed;
+    inset: 0;
+    background: #F8F7F4;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.6s ease, visibility 0.6s;
+}
+.landing-page.hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+.landing-content {
+    position: relative;
+    z-index: 2;
+    text-align: center;
+    max-width: 500px;
+    padding: 60px 40px;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(20px);
+    border-radius: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.05);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+}
+.landing-title {
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--text-dark);
+    margin-bottom: 16px;
+    letter-spacing: -0.04em;
+}
+.landing-subtitle {
+    font-size: 16px;
+    color: var(--text-light);
+    line-height: 1.6;
+    margin-bottom: 40px;
+}
+.landing-background {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 1;
+}
+.blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.5;
+    animation: floatBlob 10s infinite alternate ease-in-out;
+}
+.blob-1 {
+    width: 500px; height: 500px;
+    background: #6B5CE7;
+    top: -100px; left: -100px;
+}
+.blob-2 {
+    width: 600px; height: 600px;
+    background: #FF8A8A;
+    bottom: -150px; right: -100px;
+    animation-delay: -5s;
+}
+
+@keyframes floatBlob {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(60px, 60px) scale(1.05); }
+}
