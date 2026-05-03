@@ -802,12 +802,13 @@ const initApp = () => {
     googleLoginBtns.forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.preventDefault();
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Redirecting...';
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
             try {
-                await signInWithRedirect(auth, provider);
+                await signInWithPopup(auth, provider);
+                // onAuthStateChanged handles the success automatically
             } catch (error) {
                 console.error("Error signing in with Google: ", error);
-                alert(`Firebase Auth Error!\nCode: ${error.code}\nMessage: ${error.message}\n\nPlease send this error back!`);
+                alert(`Firebase Auth Error!\nCode: ${error.code}\nMessage: ${error.message}`);
                 btn.innerHTML = '<i class="fa-brands fa-google"></i> Sign Up with Google';
             }
         });
