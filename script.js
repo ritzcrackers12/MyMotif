@@ -673,7 +673,10 @@ const initApp = () => {
         return contained;
     }
 
-    function runAnalysis(parentNode) {
+    const GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
+    const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    async function runAnalysis(parentNode) {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
         const title = titleInput ? titleInput.value : 'Analysis';
@@ -681,21 +684,108 @@ const initApp = () => {
         const runBtn = parentNode.querySelector('.run-btn');
         if (!isBoard && !runBtn.classList.contains('ready')) return; 
         
+        // Collect all images from the frame (or from all frames inside a board)
+        let imageElements = [];
         if (isBoard) {
             const frames = getContainedNodes(parentNode);
             if (frames.length === 0) {
-                alert("Add some frames to the board first before analyzing it!");
+                alert("Add some frames with images to the board first!");
                 return;
             }
+            frames.forEach(f => {
+                f.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
+            });
+        } else {
+            parentNode.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
         }
 
-        saveStateSafe(); // Save state before spawning card
+        if (imageElements.length === 0) {
+            alert("Add some images first before running analysis!");
+            return;
+        }
+
+        saveStateSafe();
 
         const px = parseFloat(parentNode.style.left);
         const py = parseFloat(parentNode.style.top);
         const pw = parseFloat(parentNode.style.width);
         
-        spawnAnalysisCard(title, px + pw + 40, py);
+        // Spawn card with loading state
+        const card = spawnAnalysisCard(title, px + pw + 40, py);
+
+        // Extract base64 data from all <img> src attributes
+        const imageParts = [];
+        for (const img of imageElements) {
+            const src = img.src;
+            if (src.startsWith('data:')) {
+                // data:image/jpeg;base64,/9j/4AAQ...
+                const mimeMatch = src.match(/^data:(image\/\w+);base64,/);
+                if (mimeMatch) {
+                    imageParts.push({
+                        inline_data: {
+                            mime_type: mimeMatch[1],
+                            data: src.replace(/^data:image\/\w+;base64,/, '')
+                        }
+                    });
+                }
+            }
+        }
+
+        if (imageParts.length === 0) {
+            showAnalysisError(card, "Could not read image data.");
+            return;
+        }
+
+        // Build Gemini request
+        const requestBody = {
+            contents: [{
+                parts: [
+                    ...imageParts,
+                    {
+                        text: `You are a design analyst helping a user discover their personal "motif" — the recurring visual themes, patterns, and aesthetic preferences across the images they've collected.
+
+Analyze all ${imageParts.length} images together as a collection. Respond in this EXACT JSON format (no markdown, no code fences, just raw JSON):
+{
+  "commonalities": ["list 3-5 specific visual commonalities you see across these images"],
+  "aesthetic": "A 2-3 sentence description of the overall aesthetic/design movement this collection aligns with. Name specific design movements or styles.",
+  "palette": ["list 4-6 dominant colors as hex codes"],
+  "features_to_look_for": ["list 3-5 specific design features or elements the user seems drawn to that they should look for in future inspiration"],
+  "search_queries": ["list 4-6 search terms the user could use to find more images like these"]
+}`
+                    }
+                ]
+            }],
+            generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 1024
+            }
+        };
+
+        try {
+            const response = await fetch(GEMINI_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error?.message || `API returned ${response.status}`);
+            }
+
+            const data = await response.json();
+            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            
+            // Parse JSON from the response (strip any accidental markdown fences)
+            const jsonStr = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+            const insights = JSON.parse(jsonStr);
+
+            renderAnalysisResults(card, insights);
+
+        } catch (error) {
+            console.error("Gemini API Error:", error);
+            showAnalysisError(card, error.message);
+        }
     }
 
     function spawnAnalysisCard(title, x, y) {
@@ -715,43 +805,79 @@ const initApp = () => {
             <div class="individual-drag-handle" title="Move Individually"></div>
             <div class="analysis-loader">
                 <div class="spinner"></div>
-                <p>Generating insights...</p>
+                <p>Analyzing ${title} with Gemini AI...</p>
             </div>
-            <div class="analysis-results hidden">
-                <div class="analysis-section">
-                    <h3>Visual Commonalities</h3>
-                    <ul>
-                        <li>Soft, natural lighting with diffused shadows.</li>
-                        <li>Organic shapes and fluid contours, avoiding sharp angles.</li>
-                        <li>A muted, warm-neutral color palette.</li>
-                    </ul>
-                </div>
-                <div class="analysis-section">
-                    <h3>Aesthetic Breakdown</h3>
-                    <p>This collection aligns heavily with the <strong>"Organic Modern"</strong> or <strong>"Wabi-Sabi"</strong> aesthetic. The emphasis is on raw materials and textural imperfections.</p>
-                </div>
-                <div class="analysis-section">
-                    <h3>Search Queries</h3>
-                    <div class="tags-container">
-                        <span class="search-query">Organic modern</span>
-                        <span class="search-query">Wabi-sabi</span>
-                        <span class="search-query">Soft diffused</span>
-                    </div>
-                </div>
-            </div>
+            <div class="analysis-results hidden"></div>
         `;
         canvas.appendChild(card);
         selectElement(card, 'card');
+        return card;
+    }
 
-        // Mock load
-        setTimeout(() => {
-            const loader = card.querySelector('.analysis-loader');
-            const results = card.querySelector('.analysis-results');
-            if (loader && results) {
-                loader.classList.add('hidden');
-                results.classList.remove('hidden');
-            }
-        }, 1500);
+    function renderAnalysisResults(card, insights) {
+        const loader = card.querySelector('.analysis-loader');
+        const resultsDiv = card.querySelector('.analysis-results');
+        if (!loader || !resultsDiv) return;
+
+        // Build commonalities list
+        const commonList = (insights.commonalities || [])
+            .map(c => `<li>${c}</li>`).join('');
+
+        // Build palette swatches
+        const paletteSwatches = (insights.palette || [])
+            .map(hex => `<span style="display:inline-block; width:28px; height:28px; border-radius:6px; background:${hex}; border:2px solid rgba(0,0,0,0.1); margin-right:6px;" title="${hex}"></span>`)
+            .join('');
+
+        // Build features list
+        const featuresList = (insights.features_to_look_for || [])
+            .map(f => `<li>${f}</li>`).join('');
+
+        // Build search query tags
+        const queryTags = (insights.search_queries || [])
+            .map(q => `<span class="search-query">${q}</span>`).join('');
+
+        resultsDiv.innerHTML = `
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-eye" style="margin-right:6px; color:var(--accent);"></i>Visual Commonalities</h3>
+                <ul>${commonList}</ul>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-palette" style="margin-right:6px; color:var(--accent);"></i>Color Palette</h3>
+                <div style="display:flex; flex-wrap:wrap; gap:4px; margin:8px 0;">${paletteSwatches}</div>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-wand-magic-sparkles" style="margin-right:6px; color:var(--accent);"></i>Aesthetic Breakdown</h3>
+                <p>${insights.aesthetic || 'No aesthetic data available.'}</p>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-magnifying-glass" style="margin-right:6px; color:var(--accent);"></i>Features to Look For</h3>
+                <ul>${featuresList}</ul>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-hashtag" style="margin-right:6px; color:var(--accent);"></i>Search Queries</h3>
+                <div class="tags-container">${queryTags}</div>
+            </div>
+        `;
+
+        loader.classList.add('hidden');
+        resultsDiv.classList.remove('hidden');
+    }
+
+    function showAnalysisError(card, message) {
+        const loader = card.querySelector('.analysis-loader');
+        const resultsDiv = card.querySelector('.analysis-results');
+        if (!loader || !resultsDiv) return;
+
+        resultsDiv.innerHTML = `
+            <div class="analysis-section" style="text-align:center; padding:20px;">
+                <i class="fa-solid fa-triangle-exclamation" style="font-size:32px; color:#EF4444; margin-bottom:12px;"></i>
+                <h3 style="color:#EF4444;">Analysis Failed</h3>
+                <p style="font-size:13px; color:var(--text-secondary); margin-top:8px;">${message}</p>
+            </div>
+        `;
+
+        loader.classList.add('hidden');
+        resultsDiv.classList.remove('hidden');
     }
 
     // --- FIREBASE LOGIN LOGIC ---
