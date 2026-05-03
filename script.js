@@ -571,7 +571,7 @@ const initApp = () => {
             </div>
             <div class="board-resize-handle"></div>
             <div class="individual-drag-handle" title="Move Individually"></div>
-            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Analyze Board</button>
+            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Run Analysis</button>
         `;
         canvas.appendChild(board);
         selectElement(board, 'board');
@@ -602,7 +602,7 @@ const initApp = () => {
             </div>
             <div class="frame-resize-handle"></div>
             <div class="individual-drag-handle" title="Move Individually"></div>
-            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Run Motif</button>
+            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Run Analysis</button>
         `;
 
         canvas.appendChild(frame);
@@ -777,7 +777,11 @@ const initApp = () => {
         return contained;
     }
 
-    const GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
+    // A) API key: must be a valid Google AI (Gemini) API key with Generative Language API access.
+    // Replace the string below in this file, or set window.MYMOTIF_GEMINI_API_KEY before script loads.
+    const GEMINI_API_KEY =
+        (typeof window !== 'undefined' && window.MYMOTIF_GEMINI_API_KEY) ||
+        'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
     // --- INLINE IMAGE COMMENT (bubble editor → Enter → small chip, stays on this node for Gemini) ---
@@ -1021,37 +1025,80 @@ const initApp = () => {
             return;
         }
 
-        // Build Gemini request
+        const analystPreamble = `You are an expert visual design analyst and aesthetic researcher with deep knowledge of design history, art movements, graphic design theory, and contemporary visual culture. You specialize in identifying the subtle visual DNA that makes a collection of images feel cohesive.
+
+When a user uploads a collection of images under a motif title, you will analyze them with the depth of a senior creative director, not a casual observer. Your analysis should surface insights the user couldn't articulate themselves — the subconscious patterns they are drawn to.`;
+
+        const jsonContract = `You MUST respond with a single valid JSON object only (no markdown, no prose outside JSON). Use exactly these keys:
+
+1. "visual_dna" (string): Break down what the designs share across form, line quality, proportion, complexity, texture, color, and how literal vs abstract they are.
+
+2. "tension_analysis" (string): Contradictions within the collection; what the user is pulled between.
+
+3. "aesthetic_movements" (array of objects): Each object: "name" (string, e.g. Cybersigilism, Brutalism), "match_percent" (integer 0-100), "explanation" (string — why this movement fits).
+
+4. "unconscious_preference_summary" (string): Exactly 2-3 sentences on what the collection reveals about their taste that they probably could not say themselves.
+
+5. "what_to_explore_next" (string): One direction slightly outside their comfort zone that logically extends their taste.
+
+6. "search_queries" (object) with these array-of-strings properties (each at least 3 items when possible):
+   - "precise_design_terminology"
+   - "broad_discovery"
+   - "specific_artists_or_designers"
+   - "pinterest" (queries tuned for Pinterest visual search)
+   - "arena" (queries tuned for Are.na boards / channels)
+   - "google_images" (queries tuned for Google Images)
+
+7. "do_not_explore" (array of strings): Aesthetic directions that would feel wrong for this collection.
+
+8. "era_fingerprint" (string): What decade or design era the collection feels rooted in.
+
+9. "mood_score" (object) with three sub-objects, each with "score_0_to_100" (integer) and "interpretation" (short string):
+   - "warm_vs_cold" (0 = ice-cold / clinical, 100 = warm / intimate)
+   - "loud_vs_quiet" (0 = whisper-quiet / minimal, 100 = loud / maximal)
+   - "familiar_vs_alien" (0 = familiar / mainstream, 100 = alien / uncanny)
+
+10. "cultural_geography" (string): What cultural visual tradition(s) the collection pulls from (regions, diasporas, vernaculars, or global fusion).`;
+
+        const userTask = `Motif / frame title: "${title}"
+
+${contextText || ''}${commentsText}
+
+There are exactly ${imageParts.length} images attached in order (Image 1 through Image ${imageParts.length}). Map each per-image note to the matching image. If a note is missing for an image, infer from that image alone.
+
+Return the JSON object now.`;
+
         const requestBody = {
             contents: [{
                 parts: [
                     ...imageParts,
-                    {
-                        text: `You are an expert Design Strategist and Aesthetic Researcher. The user is building a mood board: they placed reference images and wrote short notes on what they like about EACH image (stars, texture, era, etc.). Your job is to connect those verbal preferences to the visuals and help them discover more similar work.
-
-${contextText || ''}
-${commentsText}
-
-You have exactly ${imageParts.length} images in order (Image 1 … Image ${imageParts.length}). Cross-reference every per-image note with what you see in that image. Where a note is missing, infer from pixels only.
-
-Return a JSON object with these exact keys:
-- "commonalities": (Array) 3-5 themes that appear across the set OR that the user explicitly called out in their notes.
-- "aesthetic": (String) 2-3 sentences naming likely design movements, eras, or vibes (e.g. Memphis, Y2K chrome, folk illustration) tied to BOTH the visuals and the user's language.
-- "palette": (Array) 5-6 hex codes that match the mood (approximate is fine).
-- "features_to_look_for": (Array) 4-6 concrete visual traits to hunt for (e.g. "distressed vector star," "muted risograph texture") informed by the notes.
-- "recommendation": (String) 2-3 sentences on how to search and refine (tools, sites, or angles) using their stated likes.
-- "search_queries": (Array) 5-8 copy-pasteable search strings (mix specific phrases + style keywords) optimized for image search / Pinterest / design archives. At least half should clearly reflect wording or intent from the user's per-image notes.
-
-Respond ONLY with raw JSON (no markdown fences).`
-
-                    }
+                    { text: `${analystPreamble}\n\n${jsonContract}\n\n${userTask}` }
                 ]
             }],
             generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 2048
+                temperature: 0.65,
+                maxOutputTokens: 8192,
+                responseMimeType: 'application/json'
             }
         };
+
+        function parseGeminiJson(rawText) {
+            let s = String(rawText || '')
+                .replace(/^\uFEFF/, '')
+                .replace(/```json\s*/gi, '')
+                .replace(/```\s*/g, '')
+                .trim();
+            try {
+                return JSON.parse(s);
+            } catch (firstErr) {
+                const start = s.indexOf('{');
+                const end = s.lastIndexOf('}');
+                if (start >= 0 && end > start) {
+                    return JSON.parse(s.slice(start, end + 1));
+                }
+                throw firstErr;
+            }
+        }
 
         try {
             const response = await fetch(GEMINI_API_URL, {
@@ -1060,23 +1107,23 @@ Respond ONLY with raw JSON (no markdown fences).`
                 body: JSON.stringify(requestBody)
             });
 
+            const errData = await response.json().catch(() => ({}));
             if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
                 throw new Error(errData.error?.message || `API returned ${response.status}`);
             }
 
-            const data = await response.json();
-            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            
-            // Parse JSON from the response (strip any accidental markdown fences)
-            const jsonStr = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-            const insights = JSON.parse(jsonStr);
-
+            const data = errData;
+            const candidate = data.candidates?.[0];
+            if (!candidate) {
+                const br = data.promptFeedback?.blockReason || data.error?.message;
+                throw new Error(br ? String(br) : 'No response from Gemini. Check API key and quota.');
+            }
+            const rawText = candidate.content?.parts?.[0]?.text || '';
+            const insights = parseGeminiJson(rawText);
             renderAnalysisResults(card, insights);
-
         } catch (error) {
             console.error("Gemini API Error:", error);
-            showAnalysisError(card, error.message);
+            showAnalysisError(card, error.message || String(error));
         }
     }
 
@@ -1097,7 +1144,7 @@ Respond ONLY with raw JSON (no markdown fences).`
             <div class="individual-drag-handle" title="Move Individually"></div>
             <div class="analysis-loader">
                 <div class="spinner"></div>
-                <p>Analyzing ${title} with Gemini AI...</p>
+                <p>Running analysis…</p>
             </div>
             <div class="analysis-results hidden"></div>
         `;
@@ -1106,53 +1153,104 @@ Respond ONLY with raw JSON (no markdown fences).`
         return card;
     }
 
+    function escapeHtml(s) {
+        if (s == null) return '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function renderTagList(items) {
+        const arr = Array.isArray(items) ? items : [];
+        return arr.map((q) => `<span class="search-query">${escapeHtml(q)}</span>`).join('');
+    }
+
+    function renderMoodRow(label, sub) {
+        if (!sub || typeof sub !== 'object') return '';
+        const score = typeof sub.score_0_to_100 === 'number' ? sub.score_0_to_100 : parseInt(sub.score, 10) || 0;
+        const clamped = Math.max(0, Math.min(100, score));
+        const interp = sub.interpretation || sub.label || '';
+        return `
+            <div class="mood-row">
+                <div class="mood-row-label">${escapeHtml(label)}</div>
+                <div class="mood-bar-track"><div class="mood-bar-fill" style="width:${clamped}%"></div></div>
+                <div class="mood-row-meta"><span class="mood-pct">${clamped}</span>${interp ? ` — ${escapeHtml(interp)}` : ''}</div>
+            </div>`;
+    }
+
     function renderAnalysisResults(card, insights) {
         const loader = card.querySelector('.analysis-loader');
         const resultsDiv = card.querySelector('.analysis-results');
         if (!loader || !resultsDiv) return;
 
-        // Build commonalities list
-        const commonList = (insights.commonalities || [])
-            .map(c => `<li>${c}</li>`).join('');
-
-        // Build palette swatches
-        const paletteSwatches = (insights.palette || [])
-            .map(hex => `<span style="display:inline-block; width:28px; height:28px; border-radius:6px; background:${hex}; border:2px solid rgba(0,0,0,0.1); margin-right:6px;" title="${hex}"></span>`)
+        const sq = insights.search_queries && typeof insights.search_queries === 'object' ? insights.search_queries : {};
+        const movements = Array.isArray(insights.aesthetic_movements) ? insights.aesthetic_movements : [];
+        const movementHtml = movements
+            .map((m) => {
+                const name = m.name || 'Movement';
+                const pct = typeof m.match_percent === 'number' ? m.match_percent : parseInt(m.match_percent, 10);
+                const p = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : '—';
+                const expl = m.explanation || '';
+                return `<div class="movement-card"><div class="movement-card-head"><strong>${escapeHtml(name)}</strong><span class="match-pct">${escapeHtml(String(p))}${p !== '—' ? '%' : ''}</span></div><p>${escapeHtml(expl)}</p></div>`;
+            })
             .join('');
 
-        // Build features list
-        const featuresList = (insights.features_to_look_for || [])
-            .map(f => `<li>${f}</li>`).join('');
+        const mood = insights.mood_score && typeof insights.mood_score === 'object' ? insights.mood_score : {};
+        const moodHtml =
+            renderMoodRow('Warm ↔ Cold', mood.warm_vs_cold) +
+            renderMoodRow('Loud ↔ Quiet', mood.loud_vs_quiet) +
+            renderMoodRow('Familiar ↔ Alien', mood.familiar_vs_alien);
 
-        // Build search query tags
-        const queryTags = (insights.search_queries || [])
-            .map(q => `<span class="search-query">${q}</span>`).join('');
+        const doNot = Array.isArray(insights.do_not_explore) ? insights.do_not_explore : [];
+        const doNotHtml = doNot.length ? `<ul>${doNot.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : '<p class="muted">—</p>';
 
         resultsDiv.innerHTML = `
             <div class="analysis-section">
-                <h3><i class="fa-solid fa-eye" style="margin-right:6px; color:var(--accent);"></i>Visual Commonalities</h3>
-                <ul>${commonList}</ul>
+                <h3><i class="fa-solid fa-dna" style="margin-right:6px; color:var(--accent);"></i>Visual DNA</h3>
+                <p>${escapeHtml(insights.visual_dna) || '—'}</p>
             </div>
             <div class="analysis-section">
-                <h3><i class="fa-solid fa-palette" style="margin-right:6px; color:var(--accent);"></i>Color Palette</h3>
-                <div style="display:flex; flex-wrap:wrap; gap:4px; margin:8px 0;">${paletteSwatches}</div>
+                <h3><i class="fa-solid fa-bolt" style="margin-right:6px; color:var(--accent);"></i>Tension analysis</h3>
+                <p>${escapeHtml(insights.tension_analysis) || '—'}</p>
             </div>
             <div class="analysis-section">
-                <h3><i class="fa-solid fa-wand-magic-sparkles" style="margin-right:6px; color:var(--accent);"></i>Aesthetic Breakdown</h3>
-                <p>${insights.aesthetic || 'No aesthetic data available.'}</p>
+                <h3><i class="fa-solid fa-layer-group" style="margin-right:6px; color:var(--accent);"></i>Aesthetic movements</h3>
+                <div class="movement-stack">${movementHtml || '<p class="muted">—</p>'}</div>
+            </div>
+            <div class="analysis-section highlight-panel">
+                <h3><i class="fa-solid fa-brain" style="margin-right:6px; color:var(--accent);"></i>Unconscious preference summary</h3>
+                <p>${escapeHtml(insights.unconscious_preference_summary) || '—'}</p>
             </div>
             <div class="analysis-section">
-                <h3><i class="fa-solid fa-magnifying-glass" style="margin-right:6px; color:var(--accent);"></i>Features to Look For</h3>
-                <ul>${featuresList}</ul>
+                <h3><i class="fa-solid fa-compass" style="margin-right:6px; color:var(--accent);"></i>What to explore next</h3>
+                <p>${escapeHtml(insights.what_to_explore_next) || '—'}</p>
             </div>
-            ${insights.recommendation ? `
-            <div class="analysis-section" style="background: rgba(107,92,231,0.05); border-radius: 10px; padding: 14px;">
-                <h3><i class="fa-solid fa-lightbulb" style="margin-right:6px; color:#F59E0B;"></i>Recommendation</h3>
-                <p>${insights.recommendation}</p>
-            </div>` : ''}
             <div class="analysis-section">
-                <h3><i class="fa-solid fa-hashtag" style="margin-right:6px; color:var(--accent);"></i>Search Queries</h3>
-                <div class="tags-container">${queryTags}</div>
+                <h3><i class="fa-solid fa-magnifying-glass" style="margin-right:6px; color:var(--accent);"></i>Search queries</h3>
+                <div class="analysis-subsection"><h4>Precise design terminology</h4><div class="tags-container">${renderTagList(sq.precise_design_terminology)}</div></div>
+                <div class="analysis-subsection"><h4>Broad discovery</h4><div class="tags-container">${renderTagList(sq.broad_discovery)}</div></div>
+                <div class="analysis-subsection"><h4>Artists &amp; designers</h4><div class="tags-container">${renderTagList(sq.specific_artists_or_designers)}</div></div>
+                <div class="analysis-subsection"><h4>Pinterest</h4><div class="tags-container">${renderTagList(sq.pinterest)}</div></div>
+                <div class="analysis-subsection"><h4>Are.na</h4><div class="tags-container">${renderTagList(sq.arena)}</div></div>
+                <div class="analysis-subsection"><h4>Google Images</h4><div class="tags-container">${renderTagList(sq.google_images)}</div></div>
+            </div>
+            <div class="analysis-section warn-panel">
+                <h3><i class="fa-solid fa-ban" style="margin-right:6px; color:#B45309;"></i>Do not explore</h3>
+                ${doNotHtml}
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-clock-rotate-left" style="margin-right:6px; color:var(--accent);"></i>Era fingerprint</h3>
+                <p>${escapeHtml(insights.era_fingerprint) || '—'}</p>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-gauge-high" style="margin-right:6px; color:var(--accent);"></i>Mood score</h3>
+                <div class="mood-stack">${moodHtml || '<p class="muted">—</p>'}</div>
+            </div>
+            <div class="analysis-section">
+                <h3><i class="fa-solid fa-earth-americas" style="margin-right:6px; color:var(--accent);"></i>Cultural geography</h3>
+                <p>${escapeHtml(insights.cultural_geography) || '—'}</p>
             </div>
         `;
 
@@ -1169,7 +1267,7 @@ Respond ONLY with raw JSON (no markdown fences).`
             <div class="analysis-section" style="text-align:center; padding:20px;">
                 <i class="fa-solid fa-triangle-exclamation" style="font-size:32px; color:#EF4444; margin-bottom:12px;"></i>
                 <h3 style="color:#EF4444;">Analysis Failed</h3>
-                <p style="font-size:13px; color:var(--text-secondary); margin-top:8px;">${message}</p>
+                <p style="font-size:13px; color:var(--text-secondary); margin-top:8px;">${escapeHtml(message)}</p>
             </div>
         `;
 

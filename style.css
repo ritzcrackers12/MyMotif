@@ -360,7 +360,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Analysis Card (On Canvas) */
 .analysis-card {
     position: absolute;
-    width: 380px;
+    width: 420px;
     background: var(--panel-bg);
     box-shadow: 0 10px 30px rgba(0,0,0,0.1);
     border-radius: 16px;
@@ -407,6 +407,100 @@ h1, h2, h3, h4, h5, h6 {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    max-height: min(72vh, 620px);
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.analysis-subsection {
+    margin-top: 14px;
+}
+.analysis-subsection:first-of-type {
+    margin-top: 8px;
+}
+.analysis-subsection h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+.highlight-panel {
+    background: rgba(107, 92, 231, 0.06);
+    border-radius: 12px;
+    padding: 14px;
+    border: 1px solid rgba(107, 92, 231, 0.15);
+}
+.warn-panel {
+    background: rgba(245, 158, 11, 0.08);
+    border-radius: 12px;
+    padding: 14px;
+    border: 1px solid rgba(245, 158, 11, 0.25);
+}
+.movement-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.movement-card {
+    background: rgba(0,0,0,0.03);
+    border-radius: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-soft);
+}
+.movement-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.movement-card p {
+    margin: 0;
+    font-size: 12px;
+}
+.match-pct {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    flex-shrink: 0;
+}
+.mood-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.mood-row-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.mood-bar-track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--border-soft);
+    overflow: hidden;
+}
+.mood-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), #a78bfa);
+    transition: width 0.3s ease;
+}
+.mood-row-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+.mood-pct {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.analysis-section .muted {
+    color: var(--text-secondary);
+    font-style: italic;
+    margin: 0;
 }
 .analysis-section h3 {
     font-size: 13px;
