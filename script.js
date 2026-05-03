@@ -1153,23 +1153,16 @@ Respond ONLY with raw JSON (no markdown fences).`
         isSigningIn = true;
         
         try {
-            console.log("Attempting Google Sign In with Popup...");
-            await signInWithPopup(auth, provider);
+            console.log("Attempting Google Sign In with Redirect...");
+            // Redirect is often more reliable on GitHub Pages than Popups
+            await signInWithRedirect(auth, provider);
         } catch (error) {
             console.error("Firebase Auth Error:", error.code, error.message);
-            
-            if (error.code === 'auth/operation-not-allowed') {
-                alert("Error: Google Sign-In is not enabled in your Firebase Console. Please enable it under Authentication > Sign-in method.");
-            } else if (error.code === 'auth/unauthorized-domain') {
-                alert("Error: This domain is not authorized in your Firebase Console. Add '" + window.location.hostname + "' to the Authorized Domains list.");
-            } else if (error.code === 'auth/cancelled-popup-request' || error.code === 'auth/popup-closed-by-user') {
-                // User closed the popup, no action needed
-            } else {
-                alert("Sign-in Error: " + error.message + "\n\nTip: Ensure you are running this via a local server (http://), not by double-clicking index.html (file://).");
-            }
+            alert("Auth Error: " + error.code + "\nDomain: " + window.location.hostname + "\n\nMake sure '" + window.location.hostname + "' is added to 'Authorized Domains' in the Firebase Console (Authentication > Settings).");
         } finally {
             isSigningIn = false;
         }
+
 
     }
 
