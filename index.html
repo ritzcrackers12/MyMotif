@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Motif - Visual AI Analysis</title>
+    <link rel="stylesheet" href="style.css?v=1.0.1">
+    <!-- Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="light-theme">
+    <!-- Landing Page / Login -->
+    <div id="landing-page" class="landing-page">
+        <div class="landing-background">
+            <div class="blob blob-1"></div>
+            <div class="blob blob-2"></div>
+        </div>
+        <div class="landing-content">
+            <h1 class="landing-title">My Motif</h1>
+            <p class="landing-subtitle">The spatial canvas for visual thinkers and aesthetic researchers. Organize, analyze, and discover your motifs.</p>
+            <div style="display:flex; flex-direction:column; gap:16px;">
+                <button class="primary-btn" id="signup-google-btn"><i class="fa-brands fa-google"></i> Sign Up with Google</button>
+                <p style="font-size: 13px; color: var(--text-secondary);">Already have an account? <a href="#" id="login-google-btn" style="color: var(--accent); font-weight:600; text-decoration:none;">Log in</a></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <header class="top-toolbar white-panel">
+        <div class="logo">My Motif</div>
+        <div class="divider-vertical"></div>
+        <div class="tools">
+            <button class="tool-btn active" data-tool="select" title="Select Tool (V)"><i class="fa-solid fa-arrow-pointer"></i></button>
+            <button class="tool-btn" data-tool="pan" title="Pan Tool (Space + Drag)"><i class="fa-solid fa-hand"></i></button>
+            <div class="divider-vertical"></div>
+            <button class="tool-btn" data-tool="board" title="Draw Board (B)"><i class="fa-solid fa-layer-group"></i> Board</button>
+            <button class="tool-btn" data-tool="frame" title="Draw Frame (F)"><i class="fa-regular fa-square-plus"></i> Frame</button>
+            <div class="divider-vertical"></div>
+            <button class="tool-btn" data-tool="comment" title="Add Comment (C)"><i class="fa-solid fa-comment-dots"></i> Comment</button>
+            <button class="tool-btn" data-tool="context" title="Set Frame Context"><i class="fa-solid fa-bullseye"></i> Context</button>
+        </div>
+        <div class="divider-vertical"></div>
+        <div class="user-actions">
+            <button class="icon-btn" id="save-cloud-btn" title="Save to Cloud" style="display: none;"><i class="fa-solid fa-cloud-arrow-up"></i></button>
+            <button class="icon-btn login-trigger" title="Log In"><i class="fa-solid fa-user"></i></button>
+        </div>
+    </header>
+
+    <div class="app-container">
+        <!-- Canvas Area -->
+        <main id="board-container">
+            <div id="canvas">
+                <div id="ghost-frame"></div>
+                <!-- Frames injected here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Hidden global file input for adding images to frames -->
+    <input type="file" multiple accept="image/*" style="display: none;" id="global-file-input">
+
+    <!-- Cache-busting script version to force latest update -->
+    <script type="module" src="script.js?v=1.0.2"></script>
+
+
+</body>
+</html>
