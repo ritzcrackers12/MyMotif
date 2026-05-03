@@ -947,7 +947,7 @@ const initApp = () => {
             ? window.MYMOTIF_GEMINI_MODEL_CHAIN
             : typeof window !== 'undefined' && window.MYMOTIF_GEMINI_MODEL
               ? [window.MYMOTIF_GEMINI_MODEL]
-              : ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+              : ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 
     function geminiUrl(modelId) {
         return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
@@ -966,6 +966,14 @@ const initApp = () => {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    const GEMINI_FETCH_TIMEOUT_MS = 75000;
+
+    function geminiCandidateHasText(data) {
+        const parts = data?.candidates?.[0]?.content?.parts;
+        if (!Array.isArray(parts)) return false;
+        return parts.some((p) => typeof p.text === 'string' && p.text.trim().length > 0);
+    }
+
     /**
      * Calls Gemini with quota-aware retry (honors "retry in Xs") and model fallback chain.
      */
@@ -974,15 +982,46 @@ const initApp = () => {
         for (const modelId of GEMINI_MODEL_CHAIN) {
             const url = geminiUrl(modelId);
             for (let attempt = 0; attempt < 2; attempt++) {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody)
-                });
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+                let response;
+                try {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody),
+                        signal: controller.signal
+                    });
+                } catch (e) {
+                    clearTimeout(timer);
+                    if (e && e.name === 'AbortError') {
+                        lastMessage = `Request timed out after ${Math.round(GEMINI_FETCH_TIMEOUT_MS / 1000)}s (network or very large images). Try fewer images or a faster connection.`;
+                    } else {
+                        lastMessage = e && e.message ? String(e.message) : 'Network error calling Gemini.';
+                    }
+                    break;
+                }
+                clearTimeout(timer);
+
                 const data = await response.json().catch(() => ({}));
-                if (response.ok && data.candidates && data.candidates.length > 0) {
+
+                if (data.promptFeedback?.blockReason) {
+                    lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
+                    break;
+                }
+
+                const c0 = data.candidates?.[0];
+                if (response.ok && c0) {
+                    if (!geminiCandidateHasText(data)) {
+                        const fr = c0.finishReason || c0.finish_reason;
+                        lastMessage = fr
+                            ? `Model returned no text (finish: ${fr}). Try different images or a smaller set.`
+                            : 'Model returned no text in the response.';
+                        break;
+                    }
                     return data;
                 }
+
                 lastMessage = data.error?.message || `HTTP ${response.status}`;
                 const exhausted =
                     response.status === 429 ||
@@ -1288,6 +1327,70 @@ const initApp = () => {
         return '';
     }
 
+    /** Parse data: URLs for Gemini (handles image/svg+xml, charset, etc.). */
+    function dataUrlToGeminiInlineData(src) {
+        if (!src || typeof src !== 'string' || !src.startsWith('data:')) return null;
+        const comma = src.indexOf(',');
+        if (comma < 0) return null;
+        const head = src.slice(0, comma).toLowerCase();
+        if (!head.includes('base64')) return null;
+        const meta = src.slice(5, comma);
+        const mime = meta.split(';')[0].trim().toLowerCase();
+        if (!mime.startsWith('image/')) return null;
+        const data = src.slice(comma + 1).replace(/\s/g, '');
+        if (!data) return null;
+        return { mime_type: mime, data };
+    }
+
+    /** Re-encode to JPEG and cap size so the API request stays small and returns faster. */
+    async function imageElementToGeminiJpegPart(imgEl, maxDim = 768, quality = 0.72) {
+        const im = imgEl;
+        if (!im.complete) {
+            await new Promise((resolve, reject) => {
+                im.addEventListener('load', () => resolve(), { once: true });
+                im.addEventListener(
+                    'error',
+                    () => reject(new Error('Could not load image for analysis')),
+                    { once: true }
+                );
+            });
+        }
+        const w = im.naturalWidth || im.width || 0;
+        const h = im.naturalHeight || im.height || 0;
+        if (!w || !h) throw new Error('Image has no dimensions');
+
+        let tw = w;
+        let th = h;
+        if (Math.max(w, h) > maxDim) {
+            if (w >= h) {
+                tw = maxDim;
+                th = Math.max(1, Math.round((h * maxDim) / w));
+            } else {
+                th = maxDim;
+                tw = Math.max(1, Math.round((w * maxDim) / h));
+            }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = tw;
+        canvas.height = th;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas not available');
+        ctx.drawImage(im, 0, 0, tw, th);
+
+        try {
+            const parsed = dataUrlToGeminiInlineData(canvas.toDataURL('image/jpeg', quality));
+            if (parsed) return parsed;
+            const fallback = dataUrlToGeminiInlineData(canvas.toDataURL('image/jpeg', 0.85));
+            if (fallback) return fallback;
+        } catch (canvasErr) {
+            const direct = dataUrlToGeminiInlineData(im.src);
+            if (direct) return direct;
+            throw canvasErr;
+        }
+        throw new Error('Could not encode image');
+    }
+
     async function runAnalysis(parentNode) {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
@@ -1348,25 +1451,21 @@ const initApp = () => {
             contextText = `The user's project context and goals:\n${contexts.map((c) => `- ${c}`).join('\n')}\n`;
         }
 
-        const imageParts = [];
-        for (const { img } of imageRecords) {
-            const src = img.src;
-            if (src.startsWith('data:')) {
-                // data:image/jpeg;base64,/9j/4AAQ...
-                const mimeMatch = src.match(/^data:(image\/\w+);base64,/);
-                if (mimeMatch) {
-                    imageParts.push({
-                        inline_data: {
-                            mime_type: mimeMatch[1],
-                            data: src.replace(/^data:image\/\w+;base64,/, '')
-                        }
-                    });
-                }
-            }
-        }
+        const prepared = await Promise.all(
+            imageRecords.map(({ img }) =>
+                imageElementToGeminiJpegPart(img).catch((err) => {
+                    console.warn('Prep image for analysis:', err);
+                    return null;
+                })
+            )
+        );
+        const imageParts = prepared.filter(Boolean).map((inline) => ({ inline_data: inline }));
 
         if (imageParts.length === 0) {
-            showAnalysisError(card, "Could not read image data.");
+            showAnalysisError(
+                card,
+                'Could not read image pixels for the API. If images are from another site, try re-uploading files from your device.'
+            );
             return;
         }
 
@@ -1422,7 +1521,7 @@ Return the JSON object now.`;
             }],
             generationConfig: {
                 temperature: 0.65,
-                maxOutputTokens: 8192,
+                maxOutputTokens: 4096,
                 responseMimeType: 'application/json'
             }
         };

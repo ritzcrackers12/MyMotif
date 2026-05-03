@@ -407,6 +407,10 @@ h1, h2, h3, h4, h5, h6 {
     gap: 16px;
     padding: 40px 0;
 }
+.analysis-loader.hidden,
+.analysis-results.hidden {
+    display: none !important;
+}
 .spinner {
     width: 36px; height: 36px;
     border: 3px solid var(--btn-hover);
