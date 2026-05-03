@@ -26,6 +26,10 @@ const initApp = () => {
                 boardContainer.style.cursor = 'crosshair';
             } else if (currentTool === 'pan') {
                 boardContainer.style.cursor = 'grab';
+            } else if (currentTool === 'comment') {
+                boardContainer.style.cursor = 'crosshair';
+            } else if (currentTool === 'context') {
+                boardContainer.style.cursor = 'crosshair';
             } else {
                 boardContainer.style.cursor = 'default';
             }
@@ -253,6 +257,24 @@ const initApp = () => {
             if (runBtn) {
                 const parentNode = runBtn.closest('.motif-frame, .motif-board');
                 if (parentNode) runAnalysis(parentNode);
+                return;
+            }
+
+            // --- COMMENT TOOL: click an image to add a note ---
+            if (currentTool === 'comment') {
+                const imgNode = e.target.closest('.motif-image-node');
+                if (imgNode) {
+                    openCommentModal(imgNode);
+                }
+                return;
+            }
+
+            // --- CONTEXT TOOL: click a frame to set project context ---
+            if (currentTool === 'context') {
+                const frame = e.target.closest('.motif-frame');
+                if (frame) {
+                    openContextModal(frame);
+                }
                 return;
             }
 
@@ -676,13 +698,114 @@ const initApp = () => {
     const GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
+    // --- COMMENT MODAL ---
+    function openCommentModal(imgNode) {
+        const existing = imgNode.dataset.comment || '';
+        const overlay = document.createElement('div');
+        overlay.className = 'comment-input-overlay';
+        overlay.innerHTML = `
+            <div class="comment-input-modal">
+                <h3><i class="fa-solid fa-comment-dots" style="color:var(--accent); margin-right:6px;"></i>Add Comment</h3>
+                <p>What do you like about this image? This helps Gemini understand your style.</p>
+                <textarea id="comment-textarea" placeholder="e.g. I love the star shape and how it's slightly distressed...">${existing}</textarea>
+                <div class="modal-actions">
+                    <button class="cancel-btn">Cancel</button>
+                    <button class="save-btn">Save</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const textarea = overlay.querySelector('#comment-textarea');
+        textarea.focus();
+
+        overlay.querySelector('.cancel-btn').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        overlay.querySelector('.save-btn').addEventListener('click', () => {
+            const val = textarea.value.trim();
+            imgNode.dataset.comment = val;
+
+            // Remove old comment bubble/icon
+            imgNode.querySelector('.image-comment')?.remove();
+            imgNode.querySelector('.image-comment-icon')?.remove();
+
+            if (val) {
+                // Add comment icon badge
+                const icon = document.createElement('div');
+                icon.className = 'image-comment-icon';
+                icon.innerHTML = '<i class="fa-solid fa-comment"></i>';
+                icon.title = val;
+                imgNode.appendChild(icon);
+
+                // Add visible comment bubble
+                const bubble = document.createElement('div');
+                bubble.className = 'image-comment';
+                bubble.textContent = val;
+                imgNode.appendChild(bubble);
+            }
+            overlay.remove();
+            setTool('select');
+        });
+    }
+
+    // --- CONTEXT MODAL ---
+    function openContextModal(frame) {
+        const existing = frame.dataset.context || '';
+        const overlay = document.createElement('div');
+        overlay.className = 'comment-input-overlay';
+        overlay.innerHTML = `
+            <div class="comment-input-modal">
+                <h3><i class="fa-solid fa-bullseye" style="color:var(--accent); margin-right:6px;"></i>Set Frame Context</h3>
+                <p>What's the project? Tell Gemini what you're trying to create so it can give you actionable advice.</p>
+                <textarea id="context-textarea" placeholder="e.g. I'm designing a t-shirt with stars but I can't figure out the right style...">${existing}</textarea>
+                <div class="modal-actions">
+                    <button class="cancel-btn">Cancel</button>
+                    <button class="save-btn">Save Context</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const textarea = overlay.querySelector('#context-textarea');
+        textarea.focus();
+
+        overlay.querySelector('.cancel-btn').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        overlay.querySelector('.save-btn').addEventListener('click', () => {
+            const val = textarea.value.trim();
+            frame.dataset.context = val;
+
+            // Remove old context bar
+            frame.querySelector('.frame-context-bar')?.remove();
+
+            if (val) {
+                const bar = document.createElement('div');
+                bar.className = 'frame-context-bar';
+                bar.innerHTML = `
+                    <i class="fa-solid fa-bullseye"></i>
+                    <span title="${val}">${val}</span>
+                    <button class="edit-context-btn" title="Edit Context"><i class="fa-solid fa-pen"></i></button>
+                `;
+                frame.appendChild(bar);
+
+                // Edit button
+                bar.querySelector('.edit-context-btn').addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    openContextModal(frame);
+                });
+            }
+            overlay.remove();
+            setTool('select');
+        });
+    }
+
     async function runAnalysis(parentNode) {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
         const title = titleInput ? titleInput.value : 'Analysis';
         
         const runBtn = parentNode.querySelector('.run-btn');
-        if (!isBoard && !runBtn.classList.contains('ready')) return; 
+        // Allow run if there are images (we check below)
         
         // Collect all images from the frame (or from all frames inside a board)
         let imageElements = [];
@@ -712,6 +835,42 @@ const initApp = () => {
         
         // Spawn card with loading state
         const card = spawnAnalysisCard(title, px + pw + 40, py);
+
+        // Collect user comments from image nodes
+        const allImageNodes = isBoard 
+            ? Array.from(parentNode.querySelectorAll('.motif-frame .motif-image-node'))
+                .concat(Array.from(document.querySelectorAll('.motif-frame')).filter(f => {
+                    // only frames inside this board
+                    const fb = f.getBoundingClientRect();
+                    const bb = parentNode.getBoundingClientRect();
+                    return fb.left >= bb.left && fb.right <= bb.right && fb.top >= bb.top && fb.bottom <= bb.bottom;
+                }).flatMap(f => Array.from(f.querySelectorAll('.motif-image-node'))))
+            : Array.from(parentNode.querySelectorAll('.motif-image-node'));
+        
+        const comments = [];
+        allImageNodes.forEach((node, i) => {
+            if (node.dataset.comment) {
+                comments.push(`Image ${i + 1}: "${node.dataset.comment}"`);
+            }
+        });
+        const commentsText = comments.length > 0 
+            ? `\nThe user left these comments about what they like in specific images:\n${comments.join('\n')}\n`
+            : '';
+
+        // Collect frame context
+        let contextText = '';
+        if (!isBoard && parentNode.dataset.context) {
+            contextText = `The user's project context: "${parentNode.dataset.context}"\n`;
+        } else if (isBoard) {
+            // Check if any contained frame has context
+            const framesWithContext = [];
+            document.querySelectorAll('.motif-frame').forEach(f => {
+                if (f.dataset.context) framesWithContext.push(f.dataset.context);
+            });
+            if (framesWithContext.length > 0) {
+                contextText = `The user's project context: "${framesWithContext.join('; ')}"\n`;
+            }
+        }
 
         // Extract base64 data from all <img> src attributes
         const imageParts = [];
@@ -744,12 +903,15 @@ const initApp = () => {
                     {
                         text: `You are a design analyst helping a user discover their personal "motif" — the recurring visual themes, patterns, and aesthetic preferences across the images they've collected.
 
-Analyze all ${imageParts.length} images together as a collection. Respond in this EXACT JSON format (no markdown, no code fences, just raw JSON):
+${contextText}${commentsText}
+
+Analyze all ${imageParts.length} images together as a collection. Use the user's context and comments to deliver deeply personalized insights. Respond in this EXACT JSON format (no markdown, no code fences, just raw JSON):
 {
   "commonalities": ["list 3-5 specific visual commonalities you see across these images"],
   "aesthetic": "A 2-3 sentence description of the overall aesthetic/design movement this collection aligns with. Name specific design movements or styles.",
   "palette": ["list 4-6 dominant colors as hex codes"],
   "features_to_look_for": ["list 3-5 specific design features or elements the user seems drawn to that they should look for in future inspiration"],
+  "recommendation": "A 2-3 sentence actionable recommendation for how the user should approach their project based on their style preferences and the context they provided.",
   "search_queries": ["list 4-6 search terms the user could use to find more images like these"]
 }`
                     }
@@ -853,6 +1015,11 @@ Analyze all ${imageParts.length} images together as a collection. Respond in thi
                 <h3><i class="fa-solid fa-magnifying-glass" style="margin-right:6px; color:var(--accent);"></i>Features to Look For</h3>
                 <ul>${featuresList}</ul>
             </div>
+            ${insights.recommendation ? `
+            <div class="analysis-section" style="background: rgba(107,92,231,0.05); border-radius: 10px; padding: 14px;">
+                <h3><i class="fa-solid fa-lightbulb" style="margin-right:6px; color:#F59E0B;"></i>Recommendation</h3>
+                <p>${insights.recommendation}</p>
+            </div>` : ''}
             <div class="analysis-section">
                 <h3><i class="fa-solid fa-hashtag" style="margin-right:6px; color:var(--accent);"></i>Search Queries</h3>
                 <div class="tags-container">${queryTags}</div>
