@@ -780,54 +780,104 @@ const initApp = () => {
     const GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-    // --- COMMENT MODAL ---
+    // --- INLINE IMAGE COMMENT (bubble editor → Enter → small chip, stays on this node for Gemini) ---
+    let activeCommentEditor = null;
+
+    function stripCommentUI(imgNode) {
+        imgNode.querySelectorAll('.image-comment-editor, .image-comment-chip, .image-comment, .image-comment-icon').forEach((el) => el.remove());
+    }
+
+    function truncateCommentText(str, max) {
+        const s = str.trim();
+        if (s.length <= max) return s;
+        return s.slice(0, max - 1) + '…';
+    }
+
+    function renderCommentChip(imgNode) {
+        const val = (imgNode.dataset.comment || '').trim();
+        stripCommentUI(imgNode);
+        if (!val) return;
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'image-comment-chip';
+        chip.title = val;
+        chip.setAttribute('aria-label', 'Edit note on this image');
+        const icon = document.createElement('i');
+        icon.className = 'fa-solid fa-comment-dots';
+        const span = document.createElement('span');
+        span.className = 'image-comment-chip-text';
+        span.textContent = truncateCommentText(val, 36);
+        chip.append(icon, span);
+        chip.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openCommentModal(imgNode);
+        });
+        chip.addEventListener('mousedown', (ev) => ev.stopPropagation());
+        imgNode.appendChild(chip);
+    }
+
+    function commitInlineComment(imgNode, textarea) {
+        const val = textarea.value.trim();
+        imgNode.dataset.comment = val;
+        activeCommentEditor = null;
+        renderCommentChip(imgNode);
+        setTool('select');
+    }
+
+    function cancelInlineComment(imgNode, initialDataset) {
+        imgNode.dataset.comment = initialDataset;
+        activeCommentEditor = null;
+        renderCommentChip(imgNode);
+        setTool('select');
+    }
+
     function openCommentModal(imgNode) {
-        const existing = imgNode.dataset.comment || '';
-        const overlay = document.createElement('div');
-        overlay.className = 'comment-input-overlay';
-        overlay.innerHTML = `
-            <div class="comment-input-modal">
-                <h3><i class="fa-solid fa-comment-dots" style="color:var(--accent); margin-right:6px;"></i>Note on this image</h3>
-                <p>What do you like here (shape, era, texture, color, reference)? Add notes on each image, then click <strong>Run</strong> on the frame or board — Gemini uses every note plus the pixels to suggest styles, features, and search queries.</p>
-                <textarea id="comment-textarea" placeholder="e.g. Rough star silhouette, 70s editorial, slightly distressed print...">${existing}</textarea>
-                <div class="modal-actions">
-                    <button class="cancel-btn">Cancel</button>
-                    <button class="save-btn">Save</button>
-                </div>
+        if (activeCommentEditor) {
+            if (activeCommentEditor.imgNode === imgNode) {
+                activeCommentEditor.wrap.querySelector('textarea').focus();
+                return;
+            }
+            const prevTa = activeCommentEditor.wrap.querySelector('textarea');
+            commitInlineComment(activeCommentEditor.imgNode, prevTa);
+        }
+
+        const legacyBubble = imgNode.querySelector('.image-comment');
+        if (legacyBubble && legacyBubble.textContent.trim() && !(imgNode.dataset.comment || '').trim()) {
+            imgNode.dataset.comment = legacyBubble.textContent.trim();
+        }
+        const initialDataset = imgNode.dataset.comment || '';
+
+        stripCommentUI(imgNode);
+
+        const wrap = document.createElement('div');
+        wrap.className = 'image-comment-editor';
+        wrap.innerHTML = `
+            <div class="image-comment-editor-inner">
+                <textarea class="image-comment-editor-input" rows="3" placeholder="What do you like about this image?"></textarea>
+                <div class="image-comment-editor-hint"><kbd>Enter</kbd> save · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Esc</kbd> cancel</div>
             </div>
         `;
-        document.body.appendChild(overlay);
-        const textarea = overlay.querySelector('#comment-textarea');
+        const textarea = wrap.querySelector('textarea');
+        textarea.value = initialDataset;
+        imgNode.appendChild(wrap);
         textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 
-        overlay.querySelector('.cancel-btn').addEventListener('click', () => overlay.remove());
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-        overlay.querySelector('.save-btn').addEventListener('click', () => {
-            const val = textarea.value.trim();
-            imgNode.dataset.comment = val;
-
-            // Remove old comment bubble/icon
-            imgNode.querySelector('.image-comment')?.remove();
-            imgNode.querySelector('.image-comment-icon')?.remove();
-
-            if (val) {
-                // Add comment icon badge
-                const icon = document.createElement('div');
-                icon.className = 'image-comment-icon';
-                icon.innerHTML = '<i class="fa-solid fa-comment"></i>';
-                icon.title = val;
-                imgNode.appendChild(icon);
-
-                // Add visible comment bubble
-                const bubble = document.createElement('div');
-                bubble.className = 'image-comment';
-                bubble.textContent = val;
-                imgNode.appendChild(bubble);
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitInlineComment(imgNode, textarea);
             }
-            overlay.remove();
-            setTool('select');
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelInlineComment(imgNode, initialDataset);
+            }
         });
+
+        wrap.addEventListener('mousedown', (e) => e.stopPropagation());
+
+        activeCommentEditor = { imgNode, wrap };
     }
 
     // --- CONTEXT MODAL ---
@@ -881,6 +931,14 @@ const initApp = () => {
         });
     }
 
+    function getImageCommentText(node) {
+        const fromData = (node.dataset.comment || '').trim();
+        if (fromData) return fromData;
+        const legacy = node.querySelector('.image-comment');
+        if (legacy && legacy.textContent) return legacy.textContent.trim();
+        return '';
+    }
+
     async function runAnalysis(parentNode) {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
@@ -929,7 +987,7 @@ const initApp = () => {
         const card = spawnAnalysisCard(title, px + pw + 40, py);
 
         const commentLines = imageRecords.map((r) => {
-            const note = (r.node.dataset.comment || '').trim();
+            const note = getImageCommentText(r.node);
             return `Image ${r.index} (frame "${r.frameTitle}"): ${note ? note : '(no written note — rely on pixels only for this one)'}`;
         });
         const commentsText =
