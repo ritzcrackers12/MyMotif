@@ -635,7 +635,7 @@ const initApp = () => {
                     }
                     
                     imgNode.innerHTML = `
-                        <img src="${compressedUrl}" style="object-fit: cover; width: 100%; height: 100%; pointer-events: none;">
+                        <img src="${compressedUrl}">
                         <div class="image-resize-handle"></div>
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
