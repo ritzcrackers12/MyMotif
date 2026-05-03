@@ -1,4 +1,3 @@
-import { getRedirectResult } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
 
 const initApp = () => {
@@ -1178,13 +1177,15 @@ Respond ONLY with raw JSON (no markdown fences).`
         }
     });
 
-    // Handle the redirect result (important for GitHub Pages)
-    getRedirectResult(auth).catch(error => {
-        console.error("Redirect Result Error:", error);
-        if (error.code !== 'auth/cancelled-popup-request') {
-            alert("Login failed during redirect: " + error.message);
-        }
-    });
+    // Redirect sign-in return (e.g. GitHub Pages). Loaded dynamically so Safari never hits a missing top-level binding.
+    import("https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js")
+        .then(({ getRedirectResult }) => getRedirectResult(auth))
+        .catch((error) => {
+            console.error("Redirect Result Error:", error);
+            if (error.code !== "auth/cancelled-popup-request") {
+                alert("Login failed during redirect: " + error.message);
+            }
+        });
 
     console.log("My Motif: App Initialized & Listeners Attached.");
     } catch (e) {
