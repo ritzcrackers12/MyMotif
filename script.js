@@ -1,6 +1,40 @@
-import { auth, db, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
+import {
+    auth,
+    db,
+    provider,
+    signInWithPopup,
+    signInWithRedirect,
+    getRedirectResult,
+    onAuthStateChanged,
+    signOut,
+    setPersistence,
+    browserLocalPersistence,
+    browserSessionPersistence,
+    inMemoryPersistence,
+    doc,
+    setDoc,
+    getDoc
+} from './firebase.js';
 
-const initApp = () => {
+/** Private / strict browsers often reject IndexedDB "local" persistence; fall back so sign-in still sticks for the tab. */
+async function ensureAuthPersistence() {
+    const tiers = [
+        ['local', browserLocalPersistence],
+        ['session', browserSessionPersistence],
+        ['memory', inMemoryPersistence]
+    ];
+    for (const [name, persistence] of tiers) {
+        try {
+            await setPersistence(auth, persistence);
+            console.log('MyMotif: auth persistence →', name);
+            return;
+        } catch (e) {
+            console.warn('MyMotif: persistence failed (' + name + '):', e && (e.code || e.message));
+        }
+    }
+}
+
+const initApp = async () => {
     try {
         console.log("My Motif: Starting Robust Boot...");
         const boardContainer = document.getElementById('board-container');
@@ -17,8 +51,22 @@ const initApp = () => {
             throw new Error("Missing board DOM (#board-container, #canvas, or #landing-page).");
         }
 
+        await ensureAuthPersistence();
+        try {
+            await getRedirectResult(auth);
+        } catch (err) {
+            const c = err && err.code;
+            if (c && c !== 'auth/popup-closed-by-user' && c !== 'auth/cancelled-popup-request') {
+                console.warn('[MyMotif] getRedirectResult:', c, err.message || err);
+            }
+        }
+        if (typeof auth.authStateReady === 'function') {
+            await auth.authStateReady();
+        }
+
         let cloudSaveTimer = null;
 
+        /** Each signed-in user only reads/writes Firestore `boards/{theirUid}` (see firestore.rules in repo). */
         async function persistBoardToCloud({ silent = false } = {}) {
             if (!auth.currentUser) return;
             document.querySelectorAll("#canvas input").forEach((inp) => inp.setAttribute("value", inp.value));
@@ -66,8 +114,11 @@ const initApp = () => {
                 landingPage.style.display = 'none';
                 
                 if (userIconBtn) {
-                    userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
-                    userIconBtn.title = `Logged in as ${user.displayName} (click to sign out)`;
+                    const av = user.photoURL;
+                    userIconBtn.innerHTML = av
+                        ? `<img src="${av}" alt="" referrerpolicy="no-referrer" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover;">`
+                        : `<i class="fa-solid fa-user-check" style="font-size:16px;"></i>`;
+                    userIconBtn.title = `Logged in as ${user.displayName || user.email || 'Google'} (click to sign out)`;
                 }
                 if (saveCloudBtn) saveCloudBtn.style.display = 'block';
                 
@@ -105,6 +156,11 @@ const initApp = () => {
                 } catch (e) {
                     console.error("Load Error:", e);
                     const msg = String(e && e.message || e);
+                    if (e?.code === "permission-denied") {
+                        console.warn(
+                            "MyMotif: Firestore permission denied. Deploy rules in firestore.rules (boards/{userId} read/write only for request.auth.uid == userId)."
+                        );
+                    }
                     if (e?.code === "unavailable" || e?.code === "not-found" || msg.includes("not-found") || msg.includes("offline")) {
                         console.warn(
                             "MyMotif: Cloud Firestore is not reachable. In Firebase Console open project \"mymotiffinal\" → Build → Firestore Database → Create database (if you have not). Then publish rules that allow signed-in users to read/write documents under boards/{theirUid}."
@@ -130,7 +186,7 @@ const initApp = () => {
             
             try {
                 console.log("Initiating Popup Auth...");
-                await setPersistence(auth, browserLocalPersistence);
+                await ensureAuthPersistence();
                 const result = await signInWithPopup(auth, provider);
                 if (result.user) {
                     console.log("Login Success!");
@@ -142,6 +198,7 @@ const initApp = () => {
                 const code = error && error.code;
                 if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
                     try {
+                        await ensureAuthPersistence();
                         await signInWithRedirect(auth, provider);
                     } catch (e2) {
                         alert("Login Error: " + (e2.code || e2.message));
@@ -929,15 +986,25 @@ const initApp = () => {
     }
 
     // A) API key: Google AI (Gemini) with Generative Language API enabled.
-    // Optional: window.MYMOTIF_GEMINI_API_KEY, window.MYMOTIF_GEMINI_MODEL (single id),
-    // or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash-lite', ...]
+    // Optional: window.MYMOTIF_GEMINI_API_KEY, localStorage.MYMOTIF_GEMINI_API_KEY (for testing),
+    // window.MYMOTIF_GEMINI_MODEL, or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash', ...]
     //
     // GitHub Pages API key restriction (HTTP referrers) should include BOTH:
     //   https://ritzcrackers12.github.io/*
     //   https://ritzcrackers12.github.io/MyMotif/*
     // plus http://localhost:* for local dev.
+    function readStoredGeminiKey() {
+        try {
+            if (typeof localStorage === 'undefined') return null;
+            return localStorage.getItem('MYMOTIF_GEMINI_API_KEY');
+        } catch {
+            return null;
+        }
+    }
+
     const GEMINI_API_KEY =
         (typeof window !== 'undefined' && window.MYMOTIF_GEMINI_API_KEY) ||
+        readStoredGeminiKey() ||
         'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
 
     const GEMINI_MODEL_CHAIN =
@@ -947,7 +1014,13 @@ const initApp = () => {
             ? window.MYMOTIF_GEMINI_MODEL_CHAIN
             : typeof window !== 'undefined' && window.MYMOTIF_GEMINI_MODEL
               ? [window.MYMOTIF_GEMINI_MODEL]
-              : ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+              : [
+                    'gemini-2.0-flash',
+                    'gemini-2.0-flash-lite',
+                    'gemini-2.5-flash',
+                    'gemini-2.5-flash-lite',
+                    'gemini-1.5-flash'
+                ];
 
     function geminiUrl(modelId) {
         return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
@@ -1744,11 +1817,6 @@ Return the JSON object now.`;
         });
     }
 
-    // Full-page redirect return (used when popup auth is blocked, e.g. Safari). Property access avoids WebKit/destructuring quirks.
-    void import("https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js")
-        .then((mod) => mod.getRedirectResult(auth))
-        .catch((err) => console.warn("[MyMotif] redirect result:", err));
-
     console.log("My Motif: App Initialized & Listeners Attached.");
     } catch (e) {
         alert("Fatal error during app boot: " + e.message);
@@ -1758,7 +1826,9 @@ Return the JSON object now.`;
 
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initApp);
+    document.addEventListener('DOMContentLoaded', () => {
+        void initApp();
+    });
 } else {
-    initApp();
+    void initApp();
 }
