@@ -8,7 +8,8 @@ import {
     getStorage,
     ref,
     uploadBytes,
-    getDownloadURL
+    getDownloadURL,
+    getBlob
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-storage.js";
 
 // Your web app's Firebase configuration
@@ -38,6 +39,7 @@ export {
     ref,
     uploadBytes,
     getDownloadURL,
+    getBlob,
     provider,
     signInWithPopup,
     signInWithRedirect,
