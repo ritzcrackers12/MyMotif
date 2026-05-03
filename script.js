@@ -9,6 +9,7 @@ const initApp = () => {
     const landingPage = document.getElementById('landing-page');
     
     let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
+
     let scale = 1;
     let panX = window.innerWidth / 2;
     let panY = window.innerHeight / 2;
@@ -1127,7 +1128,16 @@ Respond ONLY with raw JSON (no markdown fences).`
         }
     });
 
+    // Handle the redirect result (important for GitHub Pages)
+    getRedirectResult(auth).catch(error => {
+        console.error("Redirect Result Error:", error);
+        if (error.code !== 'auth/cancelled-popup-request') {
+            alert("Login failed during redirect: " + error.message);
+        }
+    });
+
     // Login Trigger (Top Bar)
+
     userIconBtn.addEventListener('click', (e) => {
         if (auth.currentUser) {
             // If already logged in, clicking the avatar signs them out
