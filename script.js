@@ -16,6 +16,9 @@ import {
     getDoc
 } from './firebase.js';
 
+/** Default Gemini key for this app (public in client; restrict in Google Cloud via HTTP referrers). */
+const MYMOTIF_DEFAULT_GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
+
 /** Private / strict browsers often reject IndexedDB "local" persistence; fall back so sign-in still sticks for the tab. */
 async function ensureAuthPersistence() {
     const tiers = [
@@ -986,26 +989,20 @@ const initApp = async () => {
     }
 
     // A) API key: Google AI (Gemini) with Generative Language API enabled.
-    // Optional: window.MYMOTIF_GEMINI_API_KEY, localStorage.MYMOTIF_GEMINI_API_KEY (for testing),
-    // window.MYMOTIF_GEMINI_MODEL, or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash', ...]
+    // Uses MYMOTIF_DEFAULT_GEMINI_API_KEY unless you set a non-empty window.MYMOTIF_GEMINI_API_KEY before load.
+    // (We no longer read localStorage here — a stale MYMOTIF_GEMINI_API_KEY there was overriding this and breaking calls.)
+    // Optional: window.MYMOTIF_GEMINI_MODEL or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash', ...]
     //
     // GitHub Pages API key restriction (HTTP referrers) should include BOTH:
     //   https://ritzcrackers12.github.io/*
     //   https://ritzcrackers12.github.io/MyMotif/*
     // plus http://localhost:* for local dev.
-    function readStoredGeminiKey() {
-        try {
-            if (typeof localStorage === 'undefined') return null;
-            return localStorage.getItem('MYMOTIF_GEMINI_API_KEY');
-        } catch {
-            return null;
-        }
-    }
-
-    const GEMINI_API_KEY =
-        (typeof window !== 'undefined' && window.MYMOTIF_GEMINI_API_KEY) ||
-        readStoredGeminiKey() ||
-        'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
+    const winGeminiOverride =
+        typeof window !== 'undefined' &&
+        typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
+        window.MYMOTIF_GEMINI_API_KEY.trim();
+    const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
+    console.log('MyMotif: Gemini key source →', winGeminiOverride ? 'window.MYMOTIF_GEMINI_API_KEY' : 'MYMOTIF_DEFAULT_GEMINI_API_KEY');
 
     const GEMINI_MODEL_CHAIN =
         typeof window !== 'undefined' &&
