@@ -311,6 +311,35 @@ const initApp = () => {
             return;
         }
 
+        const deleteBtn = e.target.closest('.delete-btn');
+        if (deleteBtn) {
+            const parentEl = deleteBtn.closest('.motif-frame, .motif-board, .analysis-card');
+            if (parentEl) {
+                saveStateSafe();
+                parentEl.remove();
+            }
+            return;
+        }
+
+        const runBtn = e.target.closest('.run-btn');
+        if (runBtn) {
+            const parentNode = runBtn.closest('.motif-frame, .motif-board');
+            if (parentNode) runAnalysis(parentNode);
+            return;
+        }
+
+        if (currentTool === 'comment') {
+            const imgNode = e.target.closest('.motif-image-node');
+            if (imgNode) openCommentModal(imgNode);
+            return;
+        }
+
+        if (currentTool === 'context') {
+            const ctxFrame = e.target.closest('.motif-frame');
+            if (ctxFrame) openContextModal(ctxFrame);
+            return;
+        }
+
         if (currentTool === 'select' || executeIndividualMove) {
             const imageResizeHandle = e.target.closest('.image-resize-handle');
             const imageNode = e.target.closest('.motif-image-node');
@@ -326,42 +355,6 @@ const initApp = () => {
             
             const cardHeader = e.target.closest('.card-header');
             const analysisCard = e.target.closest('.analysis-card');
-
-            const deleteBtn = e.target.closest('.delete-btn');
-            const runBtn = e.target.closest('.run-btn');
-
-            if (deleteBtn) {
-                const parentEl = deleteBtn.closest('.motif-frame, .motif-board, .analysis-card');
-                if (parentEl) {
-                    saveStateSafe();
-                    parentEl.remove();
-                }
-                return;
-            }
-
-            if (runBtn) {
-                const parentNode = runBtn.closest('.motif-frame, .motif-board');
-                if (parentNode) runAnalysis(parentNode);
-                return;
-            }
-
-            // --- COMMENT TOOL: click an image to add a note ---
-            if (currentTool === 'comment') {
-                const imgNode = e.target.closest('.motif-image-node');
-                if (imgNode) {
-                    openCommentModal(imgNode);
-                }
-                return;
-            }
-
-            // --- CONTEXT TOOL: click a frame to set project context ---
-            if (currentTool === 'context') {
-                const frame = e.target.closest('.motif-frame');
-                if (frame) {
-                    openContextModal(frame);
-                }
-                return;
-            }
 
             if (e.target.tagName === 'INPUT') {
                 if (frame) selectElement(frame, 'frame');
@@ -794,9 +787,9 @@ const initApp = () => {
         overlay.className = 'comment-input-overlay';
         overlay.innerHTML = `
             <div class="comment-input-modal">
-                <h3><i class="fa-solid fa-comment-dots" style="color:var(--accent); margin-right:6px;"></i>Add Comment</h3>
-                <p>What do you like about this image? This helps Gemini understand your style.</p>
-                <textarea id="comment-textarea" placeholder="e.g. I love the star shape and how it's slightly distressed...">${existing}</textarea>
+                <h3><i class="fa-solid fa-comment-dots" style="color:var(--accent); margin-right:6px;"></i>Note on this image</h3>
+                <p>What do you like here (shape, era, texture, color, reference)? Add notes on each image, then click <strong>Run</strong> on the frame or board — Gemini uses every note plus the pixels to suggest styles, features, and search queries.</p>
+                <textarea id="comment-textarea" placeholder="e.g. Rough star silhouette, 70s editorial, slightly distressed print...">${existing}</textarea>
                 <div class="modal-actions">
                     <button class="cancel-btn">Cancel</button>
                     <button class="save-btn">Save</button>
@@ -892,30 +885,38 @@ const initApp = () => {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
         const title = titleInput ? titleInput.value : 'Analysis';
-        
-        const runBtn = parentNode.querySelector('.run-btn');
-        // Allow run if there are images (we check below)
-        
-        // Collect all images and data
-        let imageElements = [];
+
         let containedFrames = [];
-        
         if (isBoard) {
             containedFrames = getContainedNodes(parentNode);
             if (containedFrames.length === 0) {
                 alert("Add some frames with images to the board first!");
                 return;
             }
-            containedFrames.forEach(f => {
-                f.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
-            });
         } else {
             containedFrames = [parentNode];
-            parentNode.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
         }
 
-        if (imageElements.length === 0) {
-            alert("Add some images first before running analysis!");
+        const imageRecords = [];
+        let imageOrdinal = 0;
+        const collectFromFrame = (frameEl) => {
+            const frameTitle = frameEl.querySelector('.frame-title')?.value?.trim() || 'Frame';
+            frameEl.querySelectorAll('.motif-image-node').forEach((node) => {
+                const img = node.querySelector('img');
+                if (!img) return;
+                imageOrdinal += 1;
+                imageRecords.push({
+                    img,
+                    node,
+                    frameTitle,
+                    index: imageOrdinal
+                });
+            });
+        };
+        containedFrames.forEach(collectFromFrame);
+
+        if (imageRecords.length === 0) {
+            alert("Add some images first, then use the Comment tool on each image to note what you like. Run analysis when you're ready.");
             return;
         }
 
@@ -925,37 +926,23 @@ const initApp = () => {
         const py = parseFloat(parentNode.style.top);
         const pw = parseFloat(parentNode.style.width);
         
-        // Spawn card with loading state
         const card = spawnAnalysisCard(title, px + pw + 40, py);
 
-        // Collect user comments from image nodes within the relevant frames
-        const comments = [];
-        containedFrames.forEach(frame => {
-            frame.querySelectorAll('.motif-image-node').forEach((node, i) => {
-                if (node.dataset.comment) {
-                    comments.push(`Image in "${frame.querySelector('.frame-title')?.value || 'Frame'}": "${node.dataset.comment}"`);
-                }
-            });
+        const commentLines = imageRecords.map((r) => {
+            const note = (r.node.dataset.comment || '').trim();
+            return `Image ${r.index} (frame "${r.frameTitle}"): ${note ? note : '(no written note — rely on pixels only for this one)'}`;
         });
+        const commentsText =
+            `\nThe user added these per-image notes. Image order matches the images attached above (Image 1 first, then 2, …). Weight these notes heavily when suggesting search queries, styles, and features:\n${commentLines.join('\n')}\n`;
 
-        const commentsText = comments.length > 0 
-            ? `\nThe user left these comments about specific images to guide your analysis:\n${comments.join('\n')}\n`
-            : '';
-
-        // Collect frame context from the relevant frames
         let contextText = '';
-        const contexts = containedFrames
-            .map(f => f.dataset.context)
-            .filter(ctx => !!ctx);
-            
+        const contexts = containedFrames.map((f) => f.dataset.context).filter(Boolean);
         if (contexts.length > 0) {
-            contextText = `The user's project context and goals:\n${contexts.map(c => `- ${c}`).join('\n')}\n`;
+            contextText = `The user's project context and goals:\n${contexts.map((c) => `- ${c}`).join('\n')}\n`;
         }
 
-
-        // Extract base64 data from all <img> src attributes
         const imageParts = [];
-        for (const img of imageElements) {
+        for (const { img } of imageRecords) {
             const src = img.src;
             if (src.startsWith('data:')) {
                 // data:image/jpeg;base64,/9j/4AAQ...
@@ -982,20 +969,20 @@ const initApp = () => {
                 parts: [
                     ...imageParts,
                     {
-                        text: `You are an expert Design Strategist and Aesthetic Researcher. Your task is to analyze a collection of images and identify the user's "Motif" — the underlying visual DNA and stylistic patterns.
+                        text: `You are an expert Design Strategist and Aesthetic Researcher. The user is building a mood board: they placed reference images and wrote short notes on what they like about EACH image (stars, texture, era, etc.). Your job is to connect those verbal preferences to the visuals and help them discover more similar work.
 
-${contextText}
+${contextText || ''}
 ${commentsText}
 
-Analyze all ${imageParts.length} images as a unified design collection. Focus on visual metaphors, material qualities, lighting, and composition. 
+You have exactly ${imageParts.length} images in order (Image 1 … Image ${imageParts.length}). Cross-reference every per-image note with what you see in that image. Where a note is missing, infer from pixels only.
 
 Return a JSON object with these exact keys:
-- "commonalities": (Array) 3-5 high-level visual themes or recurring elements.
-- "aesthetic": (String) A sophisticated 2-3 sentence breakdown of the design movement (e.g., Bauhaus, Memphis, Brutalism, Organic Modernism) and its historical/emotional vibe.
-- "palette": (Array) 5-6 dominant hex codes that capture the mood.
-- "features_to_look_for": (Array) 3-5 specific stylistic markers the user should seek out (e.g., "High-contrast grain," "Asymmetric balance," "Saturated geometric shapes").
-- "recommendation": (String) 2-3 sentences of expert advice on how to apply these motifs to their project context.
-- "search_queries": (Array) 4-6 precise terms for finding more inspiration.
+- "commonalities": (Array) 3-5 themes that appear across the set OR that the user explicitly called out in their notes.
+- "aesthetic": (String) 2-3 sentences naming likely design movements, eras, or vibes (e.g. Memphis, Y2K chrome, folk illustration) tied to BOTH the visuals and the user's language.
+- "palette": (Array) 5-6 hex codes that match the mood (approximate is fine).
+- "features_to_look_for": (Array) 4-6 concrete visual traits to hunt for (e.g. "distressed vector star," "muted risograph texture") informed by the notes.
+- "recommendation": (String) 2-3 sentences on how to search and refine (tools, sites, or angles) using their stated likes.
+- "search_queries": (Array) 5-8 copy-pasteable search strings (mix specific phrases + style keywords) optimized for image search / Pinterest / design archives. At least half should clearly reflect wording or intent from the user's per-image notes.
 
 Respond ONLY with raw JSON (no markdown fences).`
 
@@ -1004,7 +991,7 @@ Respond ONLY with raw JSON (no markdown fences).`
             }],
             generationConfig: {
                 temperature: 0.7,
-                maxOutputTokens: 1024
+                maxOutputTokens: 2048
             }
         };
 
