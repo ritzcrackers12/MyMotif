@@ -3,11 +3,54 @@ import { auth, db, provider, signInWithPopup, signInWithRedirect, getRedirectRes
 
 
 const initApp = () => {
-    const boardContainer = document.getElementById('board-container');
-    const canvas = document.getElementById('canvas');
-    const ghostFrame = document.getElementById('ghost-frame');
-    const globalFileInput = document.getElementById('global-file-input');
-    const landingPage = document.getElementById('landing-page');
+    try {
+        console.log("My Motif: Starting Safe Boot...");
+        const boardContainer = document.getElementById('board-container');
+        const canvas = document.getElementById('canvas');
+        const ghostFrame = document.getElementById('ghost-frame');
+        const globalFileInput = document.getElementById('global-file-input');
+        const landingPage = document.getElementById('landing-page');
+        const userIconBtn = document.querySelector('.login-trigger');
+        const saveCloudBtn = document.getElementById('save-cloud-btn');
+        const signupBtn = document.getElementById('signup-google-btn');
+        const loginBtn = document.getElementById('login-google-btn');
+
+        let isSigningIn = false;
+        async function doGoogleSignIn(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            alert("Login process started... please wait for redirect.");
+            if (isSigningIn) return;
+            isSigningIn = true;
+            
+            try {
+                console.log("Attempting Google Sign In with Redirect...");
+                await signInWithRedirect(auth, provider);
+            } catch (error) {
+                console.error("Firebase Auth Error:", error.code, error.message);
+                alert("Auth Error: " + error.code + "\nDomain: " + window.location.hostname);
+            } finally {
+                isSigningIn = false;
+            }
+        }
+
+        if (signupBtn) signupBtn.addEventListener('click', doGoogleSignIn);
+        if (loginBtn) loginBtn.addEventListener('click', doGoogleSignIn);
+        if (userIconBtn) {
+            userIconBtn.addEventListener('click', (e) => {
+                if (auth.currentUser) {
+                    if(confirm("Do you want to sign out?")) {
+                        signOut(auth);
+                        document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
+                        saveStateSafe();
+                    }
+                } else {
+                    doGoogleSignIn(e);
+                }
+            });
+        }
     
     let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
 
@@ -1056,8 +1099,6 @@ Respond ONLY with raw JSON (no markdown fences).`
     }
 
     // --- FIREBASE LOGIN LOGIC ---
-    const userIconBtn = document.querySelector('.login-trigger');
-    const saveCloudBtn = document.getElementById('save-cloud-btn');
     
     // Auth State Observer
     onAuthStateChanged(auth, async (user) => {
@@ -1137,54 +1178,10 @@ Respond ONLY with raw JSON (no markdown fences).`
         }
     });
 
-    // Login Trigger (Top Bar)
-
-    userIconBtn.addEventListener('click', (e) => {
-        if (auth.currentUser) {
-            // If already logged in, clicking the avatar signs them out
-            if(confirm("Do you want to sign out?")) {
-                signOut(auth);
-                // Clear the board on sign out
-                document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
-                saveStateSafe(); // reset history
-            }
-        } else {
-            // If NOT logged in, trigger Google Sign In
-            doGoogleSignIn(e);
-        }
-    });
-
-    // Google Sign In / Sign Up — single handler to prevent duplicate popups
-    let isSigningIn = false;
-    async function doGoogleSignIn(e) {
-        if (e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-        if (isSigningIn) return;
-        isSigningIn = true;
-        
-        try {
-            console.log("Attempting Google Sign In with Redirect...");
-            // Redirect is often more reliable on GitHub Pages than Popups
-            await signInWithRedirect(auth, provider);
-        } catch (error) {
-            console.error("Firebase Auth Error:", error.code, error.message);
-            alert("Auth Error: " + error.code + "\nDomain: " + window.location.hostname + "\n\nMake sure '" + window.location.hostname + "' is added to 'Authorized Domains' in the Firebase Console (Authentication > Settings).");
-        } finally {
-            isSigningIn = false;
-        }
-
-
-    }
-
-    const signupBtn = document.getElementById('signup-google-btn');
-    const loginBtn = document.getElementById('login-google-btn');
-    
-    if (signupBtn) signupBtn.addEventListener('click', doGoogleSignIn);
-    if (loginBtn) loginBtn.addEventListener('click', doGoogleSignIn);
-
     console.log("My Motif: App Initialized & Listeners Attached.");
+    } catch (e) {
+        alert("Fatal error during app boot: " + e.message);
+    }
 };
 
 
