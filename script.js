@@ -724,28 +724,47 @@ const initApp = () => {
         globalFileInput.value = '';
     });
 
+    function isLikelyImageFile(file) {
+        const t = (file.type || '').toLowerCase().trim();
+        if (t.startsWith('image/')) return true;
+        const name = (file.name || '').toLowerCase();
+        if (/\.(png|jpe?g|gif|webp|bmp|tif|tiff|heic|heif|avif)$/i.test(name)) return true;
+        if (t === 'application/octet-stream' && name) return /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(name);
+        return false;
+    }
+
     async function compressImage(dataUrl, maxWidth = 1000) {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = () => {
+                if (!img.width || !img.height) {
+                    reject(new Error('Invalid image dimensions'));
+                    return;
+                }
                 const tempCanvas = document.createElement('canvas');
                 let width = img.width;
                 let height = img.height;
-                
+
                 if (width > maxWidth) {
                     height = Math.round((height * maxWidth) / width);
                     width = maxWidth;
                 }
-                
+
                 tempCanvas.width = width;
                 tempCanvas.height = height;
                 const ctx = tempCanvas.getContext('2d');
+                if (!ctx) {
+                    reject(new Error('Canvas not available'));
+                    return;
+                }
                 ctx.drawImage(img, 0, 0, width, height);
-                // Compress to 70% quality JPEG to save massive space
-                resolve({ 
+                resolve({
                     url: tempCanvas.toDataURL('image/jpeg', 0.7),
                     aspectRatio: width / height
                 });
+            };
+            img.onerror = () => {
+                reject(new Error('Could not decode image (unsupported or corrupt file)'));
             };
             img.src = dataUrl;
         });
@@ -761,9 +780,13 @@ const initApp = () => {
         frameBody.classList.add('has-content'); 
 
         let offset = 0;
-        Array.from(files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
+        Array.from(files).forEach((file) => {
+            if (!isLikelyImageFile(file)) return;
             const reader = new FileReader();
+            reader.onerror = () => {
+                console.error('FileReader failed:', file.name);
+                alert(`Could not read file: ${file.name || 'image'}`);
+            };
             reader.onload = async (e) => {
                 const imgNode = document.createElement('div');
                 imgNode.className = 'motif-image-node';
@@ -812,10 +835,15 @@ const initApp = () => {
                     `;
                     runBtn.classList.add('ready');
                     scheduleCloudSave();
-                } catch(error) {
-                    console.error("Image processing failed:", error);
+                } catch (error) {
+                    console.error('Image processing failed:', error);
                     imgNode.remove();
-                    alert("Failed to process image.");
+                    alert(
+                        `Could not process "${file.name || 'image'}".\n` +
+                            (error && error.message
+                                ? error.message
+                                : 'Try PNG or JPEG. HEIC may not work in all browsers.')
+                    );
                 }
             };
             reader.readAsDataURL(file);
