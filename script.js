@@ -147,70 +147,37 @@ const initApp = () => {
         canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
     }
 
-    // --- UNDO HISTORY ---
-    let historyStack = [];
-    
-    function saveState() {
-        // Sync input values to HTML attributes so innerHTML captures them
-        document.querySelectorAll('#canvas input').forEach(inp => {
-            inp.setAttribute('value', inp.value);
-        });
-        
-        // Temporarily remove selected classes to avoid saving selection state if we don't want to
-        // Actually, saving selection state is fine. 
-        
-        // We only want to save the actual children, but wait, ghost-frame is in there. 
-        // We can just save the whole innerHTML.
-        historyStack.push(canvas.innerHTML);
-        if (historyStack.length > 30) historyStack.shift();
-    }
+    const getGhostFrame = () => document.getElementById('ghost-frame');
+    const getGlobalFileInput = () => document.getElementById('global-file-input');
 
-    function undo() {
-        if (historyStack.length > 0) {
-            canvas.innerHTML = historyStack.pop();
-            // Need to re-grab the ghost frame reference since innerHTML wiped it
-            rebindGhostFrame();
-            deselectAll();
-        }
-    }
-
-    function rebindGhostFrame() {
-        // Update the global reference used by drawing logic
-        const newGhost = document.getElementById('ghost-frame');
-        if (newGhost) {
-            // we don't actually have a global let ghostFrame, it's const. 
-            // So we need to make sure we don't destroy ghostFrame.
-            // Better: remove ghostFrame from canvas before saving, put it back after.
-        }
-    }
-    
-    // Let's adjust saveState to ignore ghost-frame by extracting it
-    let ghostFrameEl = ghostFrame;
     function saveStateSafe() {
+        const ghost = getGhostFrame();
         document.querySelectorAll('#canvas input').forEach(inp => {
             inp.setAttribute('value', inp.value);
         });
         
-        if (ghostFrameEl.parentNode === canvas) {
-            canvas.removeChild(ghostFrameEl);
+        if (ghost && ghost.parentNode === canvas) {
+            canvas.removeChild(ghost);
         }
         
         historyStack.push(canvas.innerHTML);
         if (historyStack.length > 30) historyStack.shift();
         
-        canvas.prepend(ghostFrameEl);
+        if (ghost) canvas.prepend(ghost);
     }
 
     function undoSafe() {
+        const ghost = getGhostFrame();
         if (historyStack.length > 0) {
-            if (ghostFrameEl.parentNode === canvas) {
-                canvas.removeChild(ghostFrameEl);
+            if (ghost && ghost.parentNode === canvas) {
+                canvas.removeChild(ghost);
             }
             canvas.innerHTML = historyStack.pop();
-            canvas.prepend(ghostFrameEl);
+            if (ghost) canvas.prepend(ghost);
             deselectAll();
         }
     }
+
 
     // Keyboard Shortcuts (Delete & Undo)
     document.addEventListener('keydown', (e) => {
