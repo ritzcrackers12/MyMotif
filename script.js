@@ -15,22 +15,65 @@ const initApp = () => {
         const signupBtn = document.getElementById('signup-google-btn');
         const loginBtn = document.getElementById('login-google-btn');
 
+        // --- AUTH STATE OBSERVER (MOVED TO TOP) ---
+        onAuthStateChanged(auth, async (user) => {
+            console.log("Auth State Changed:", user ? "Logged In (" + user.email + ")" : "Logged Out");
+            if (user) {
+                landingPage.classList.add('hidden');
+                landingPage.style.display = 'none'; // Force hide
+                
+                userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
+                userIconBtn.title = `Logged in as ${user.displayName}`;
+                saveCloudBtn.style.display = 'block';
+                
+                try {
+                    const docSnap = await getDoc(doc(db, "boards", user.uid));
+                    if (docSnap.exists() && docSnap.data().canvasHTML) {
+                        const temp = document.createElement('div');
+                        temp.innerHTML = docSnap.data().canvasHTML;
+                        const ghost = document.getElementById('ghost-frame');
+                        if (ghost) temp.prepend(ghost);
+                        canvas.innerHTML = temp.innerHTML;
+                        document.querySelectorAll('#canvas input').forEach(inp => {
+                            if(inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
+                        });
+                    }
+                } catch(e) { console.error("Error loading board:", e); }
+            } else {
+                userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
+                userIconBtn.title = "Log In";
+                saveCloudBtn.style.display = 'none';
+                landingPage.classList.remove('hidden');
+                landingPage.style.display = 'flex'; // Ensure visible
+            }
+        });
+
+        // Handle the redirect result immediately
+        getRedirectResult(auth).then((result) => {
+            if (result && result.user) {
+                console.log("Redirect login success:", result.user.email);
+                landingPage.classList.add('hidden');
+                landingPage.style.display = 'none';
+            }
+        }).catch(error => {
+            console.error("Redirect Error:", error);
+        });
+
         let isSigningIn = false;
         async function doGoogleSignIn(e) {
             if (e) {
                 e.preventDefault();
                 e.stopPropagation();
             }
-            alert("Login process started... please wait for redirect.");
             if (isSigningIn) return;
             isSigningIn = true;
             
             try {
-                console.log("Attempting Google Sign In with Redirect...");
+                console.log("Starting Redirect Flow...");
                 await signInWithRedirect(auth, provider);
             } catch (error) {
-                console.error("Firebase Auth Error:", error.code, error.message);
-                alert("Auth Error: " + error.code + "\nDomain: " + window.location.hostname);
+                console.error("Auth Error:", error);
+                alert("Auth Error: " + (error.code || error.message));
             } finally {
                 isSigningIn = false;
             }
@@ -51,6 +94,7 @@ const initApp = () => {
                 }
             });
         }
+
     
     let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
 
