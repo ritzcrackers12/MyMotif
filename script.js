@@ -1,6 +1,11 @@
 import {
     auth,
     db,
+    storage,
+    ref,
+    uploadBytes,
+    getBytes,
+    getMetadata,
     provider,
     signInWithPopup,
     signInWithRedirect,
@@ -866,6 +871,53 @@ const initApp = async () => {
         });
     }
 
+    function uint8ToBase64(bytes) {
+        const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        let binary = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < arr.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + chunk, arr.length)));
+        }
+        return btoa(binary);
+    }
+
+    /** Download object from Storage, build `data:<mime>;base64,...`, return Gemini inline_data fields. */
+    async function fetchStorageImageAsGeminiInlineData(storagePath) {
+        const path = String(storagePath || '').trim();
+        if (!path) throw new Error('Missing storage path');
+        const storageRef = ref(storage, path);
+        const [meta, raw] = await Promise.all([
+            getMetadata(storageRef).catch(() => null),
+            getBytes(storageRef)
+        ]);
+        let mime = 'image/jpeg';
+        if (meta && meta.contentType && /^image\//i.test(meta.contentType)) {
+            mime = meta.contentType.split(';')[0].trim().toLowerCase();
+        }
+        const data = uint8ToBase64(raw);
+        const dataUrl = `data:${mime};base64,${data}`;
+        const parsed = dataUrlToGeminiInlineData(dataUrl);
+        if (!parsed) throw new Error('Could not build image data URL from Storage bytes');
+        return parsed;
+    }
+
+    /** If the canvas image has no Storage path yet, upload JPEG bytes then read back from Storage (same path). */
+    async function ensureImageOnStorageThenFetch(node, img) {
+        let path = (node.dataset.storagePath || '').trim();
+        if (path) {
+            return fetchStorageImageAsGeminiInlineData(path);
+        }
+        const part = await imageElementToGeminiJpegPart(img);
+        const dataUrl = `data:${part.mime_type};base64,${part.data}`;
+        if (!auth.currentUser) throw new Error('Sign in to save images to cloud storage for analysis.');
+        path = `boards/${auth.currentUser.uid}/canvasImages/${Date.now()}-${Math.random().toString(36).slice(2, 11)}.jpg`;
+        const blob = await fetch(dataUrl).then((r) => r.blob());
+        await uploadBytes(ref(storage, path), blob, { contentType: part.mime_type || 'image/jpeg' });
+        node.dataset.storagePath = path;
+        scheduleCloudSave();
+        return fetchStorageImageAsGeminiInlineData(path);
+    }
+
     function handleFiles(files) {
         if (!activeFrameForUpload) return;
 
@@ -948,6 +1000,13 @@ const initApp = async () => {
                         <div class="image-resize-handle"></div>
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
+                    if (auth.currentUser) {
+                        const uid = auth.currentUser.uid;
+                        const storagePath = `boards/${uid}/canvasImages/${Date.now()}-${Math.random().toString(36).slice(2, 11)}.jpg`;
+                        const blob = await fetch(compressedUrl).then((r) => r.blob());
+                        await uploadBytes(ref(storage, storagePath), blob, { contentType: 'image/jpeg' });
+                        imgNode.dataset.storagePath = storagePath;
+                    }
                     runBtn.classList.add('ready');
                     scheduleCloudSave();
                 } catch (error) {
@@ -1504,6 +1563,11 @@ const initApp = async () => {
             return;
         }
 
+        if (!auth.currentUser) {
+            alert('Please sign in to run analysis. Images are loaded from your Firebase Storage and sent to the model as base64.');
+            return;
+        }
+
         saveStateSafe();
 
         const px = parseFloat(parentNode.style.left);
@@ -1526,9 +1590,9 @@ const initApp = async () => {
         }
 
         const prepared = await Promise.all(
-            imageRecords.map(({ img }) =>
-                imageElementToGeminiJpegPart(img).catch((err) => {
-                    console.warn('Prep image for analysis:', err);
+            imageRecords.map(({ img, node }) =>
+                ensureImageOnStorageThenFetch(node, img).catch((err) => {
+                    console.warn('Prep image from Firebase Storage:', err);
                     return null;
                 })
             )
@@ -1538,7 +1602,7 @@ const initApp = async () => {
         if (imageParts.length === 0) {
             showAnalysisError(
                 card,
-                'Could not read image pixels for the API. If images are from another site, try re-uploading files from your device.'
+                'Could not load images from Firebase Storage. Check that you are signed in, Storage rules allow reads, and images were uploaded while logged in.'
             );
             return;
         }
