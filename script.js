@@ -873,12 +873,79 @@ const initApp = () => {
         return contained;
     }
 
-    // A) API key: must be a valid Google AI (Gemini) API key with Generative Language API access.
-    // Replace the string below in this file, or set window.MYMOTIF_GEMINI_API_KEY before script loads.
+    // A) API key: Google AI (Gemini) with Generative Language API enabled.
+    // Optional: window.MYMOTIF_GEMINI_API_KEY, window.MYMOTIF_GEMINI_MODEL (single id),
+    // or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash-lite', ...]
+    //
+    // GitHub Pages API key restriction (HTTP referrers) should include BOTH:
+    //   https://ritzcrackers12.github.io/*
+    //   https://ritzcrackers12.github.io/MyMotif/*
+    // plus http://localhost:* for local dev.
     const GEMINI_API_KEY =
         (typeof window !== 'undefined' && window.MYMOTIF_GEMINI_API_KEY) ||
         'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
-    const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    const GEMINI_MODEL_CHAIN =
+        typeof window !== 'undefined' &&
+        Array.isArray(window.MYMOTIF_GEMINI_MODEL_CHAIN) &&
+        window.MYMOTIF_GEMINI_MODEL_CHAIN.length
+            ? window.MYMOTIF_GEMINI_MODEL_CHAIN
+            : typeof window !== 'undefined' && window.MYMOTIF_GEMINI_MODEL
+              ? [window.MYMOTIF_GEMINI_MODEL]
+              : ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+
+    function geminiUrl(modelId) {
+        return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    }
+
+    function geminiRetryMsFromMessage(message) {
+        if (!message) return 0;
+        const m = String(message).match(/retry in ([\d.]+)\s*s/i);
+        if (!m) return 0;
+        const sec = parseFloat(m[1]);
+        if (!Number.isFinite(sec) || sec < 0) return 0;
+        return Math.min(Math.ceil(sec * 1000), 45000);
+    }
+
+    function geminiSleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Calls Gemini with quota-aware retry (honors "retry in Xs") and model fallback chain.
+     */
+    async function geminiGenerateContent(requestBody) {
+        let lastMessage = '';
+        for (const modelId of GEMINI_MODEL_CHAIN) {
+            const url = geminiUrl(modelId);
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.candidates && data.candidates.length > 0) {
+                    return data;
+                }
+                lastMessage = data.error?.message || `HTTP ${response.status}`;
+                const exhausted =
+                    response.status === 429 ||
+                    data.error?.status === 'RESOURCE_EXHAUSTED' ||
+                    /quota|exceeded|Resource exhausted/i.test(lastMessage);
+                if (exhausted && attempt === 0) {
+                    const waitMs = geminiRetryMsFromMessage(lastMessage);
+                    if (waitMs > 0) await geminiSleep(waitMs);
+                    continue;
+                }
+                break;
+            }
+        }
+        throw new Error(
+            lastMessage ||
+                'Gemini: all models in the fallback list failed. Enable billing / check quotas in Google AI Studio: https://aistudio.google.com/'
+        );
+    }
 
     async function callGeminiFollowUp(insights, messages) {
         const ctx = JSON.stringify(insights);
@@ -900,13 +967,7 @@ const initApp = () => {
             contents: historyContents,
             generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
         };
-        const res = await fetch(GEMINI_API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error?.message || `API ${res.status}`);
+        const data = await geminiGenerateContent(body);
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         const out = String(text).trim();
         return out || "(No reply text returned.)";
@@ -1330,18 +1391,7 @@ Return the JSON object now.`;
         }
 
         try {
-            const response = await fetch(GEMINI_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
-            });
-
-            const errData = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                throw new Error(errData.error?.message || `API returned ${response.status}`);
-            }
-
-            const data = errData;
+            const data = await geminiGenerateContent(requestBody);
             const candidate = data.candidates?.[0];
             if (!candidate) {
                 const br = data.promptFeedback?.blockReason || data.error?.message;
