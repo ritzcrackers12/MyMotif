@@ -225,6 +225,17 @@ h1, h2, h3, h4, h5, h6 {
     overflow: hidden; /* Images clip to the frame border */
     cursor: pointer; /* Clicking empty space uploads/prompts */
 }
+/* Native file picker via <label for="global-file-input"> — works more reliably than input.click() on mobile Safari */
+.frame-upload-label {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    opacity: 0;
+    overflow: hidden;
+}
 .empty-prompt {
     position: absolute;
     top: 50%; left: 50%;
@@ -234,6 +245,7 @@ h1, h2, h3, h4, h5, h6 {
     color: var(--text-placeholder);
     pointer-events: none;
     text-align: center;
+    z-index: 2;
 }
 .empty-prompt i {
     display: block;
@@ -331,6 +343,7 @@ h1, h2, h3, h4, h5, h6 {
     box-sizing: border-box;
     cursor: move;
     overflow: visible;
+    z-index: 3;
 }
 .motif-image-node img {
     width: 100%; height: 100%;

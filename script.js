@@ -100,6 +100,7 @@ const initApp = () => {
                             if (inp.hasAttribute("value")) inp.value = inp.getAttribute("value");
                         });
                         rehydrateAnalysisCardsFromDom();
+                        canvas.querySelectorAll('.frame-body').forEach(ensureFrameUploadLabel);
                     }
                 } catch (e) {
                     console.error("Load Error:", e);
@@ -326,6 +327,18 @@ const initApp = () => {
     let containedElementsToMove = []; // Re-added for grouped board dragging
     let lastMousedownTime = 0;
 
+    boardContainer.addEventListener(
+        'pointerdown',
+        (e) => {
+            if (e.target.closest('.top-toolbar')) return;
+            const lab = e.target.closest('.frame-upload-label');
+            if (lab) {
+                activeFrameForUpload = lab.closest('.motif-frame');
+            }
+        },
+        true
+    );
+
     boardContainer.addEventListener('mousedown', (e) => {
         if (e.target.closest('.top-toolbar')) return;
 
@@ -395,8 +408,10 @@ const initApp = () => {
 
         if (currentTool === 'comment') {
             const imgNode = e.target.closest('.motif-image-node');
-            if (imgNode) openCommentModal(imgNode);
-            return;
+            if (imgNode) {
+                openCommentModal(imgNode);
+                return;
+            }
         }
 
         if (currentTool === 'context') {
@@ -405,7 +420,7 @@ const initApp = () => {
             return;
         }
 
-        if (currentTool === 'select' || executeIndividualMove) {
+        if (currentTool === 'select' || currentTool === 'comment' || executeIndividualMove) {
             const imageResizeHandle = e.target.closest('.image-resize-handle');
             const imageNode = e.target.closest('.motif-image-node');
             
@@ -443,7 +458,13 @@ const initApp = () => {
             } else if (frameHeader) {
                 startDrag(e, frame, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(frame, 'frame');
-            } else if (frameBody && e.target === frameBody) {
+            } else if (
+                frameBody &&
+                frame &&
+                !imageNode &&
+                !e.target.closest('.motif-image-node') &&
+                !e.target.closest('.frame-upload-label')
+            ) {
                 selectElement(frame, 'frame');
                 activeFrameForUpload = frame;
                 globalFileInput.click();
@@ -618,6 +639,15 @@ const initApp = () => {
         containedElementsToMove = [];
     });
 
+    function ensureFrameUploadLabel(frameBody) {
+        if (!frameBody || frameBody.querySelector('.frame-upload-label')) return;
+        const lab = document.createElement('label');
+        lab.className = 'frame-upload-label';
+        lab.setAttribute('for', 'global-file-input');
+        lab.setAttribute('aria-label', 'Add images to this frame');
+        frameBody.insertBefore(lab, frameBody.firstChild);
+    }
+
     function createBoardAt(x, y, w, h) {
         const boardId = 'board-' + Date.now();
         const board = document.createElement('div');
@@ -661,6 +691,7 @@ const initApp = () => {
                 <button class="delete-btn" title="Delete Frame"><i class="fa-solid fa-trash"></i></button>
             </div>
             <div class="frame-body">
+                <label class="frame-upload-label" for="global-file-input" aria-label="Add images to this frame"></label>
                 <div class="empty-prompt">
                     <i class="fa-solid fa-cloud-arrow-up"></i>
                     Click to add images
@@ -724,12 +755,17 @@ const initApp = () => {
         globalFileInput.value = '';
     });
 
+    const IMAGE_FILENAME_EXT_RE =
+        /\.(png|jpe?g|jfif|pjpeg|gif|webp|bmp|tif|tiff|heic|heif|avif|ico|svg)$/i;
+
     function isLikelyImageFile(file) {
         const t = (file.type || '').toLowerCase().trim();
         if (t.startsWith('image/')) return true;
         const name = (file.name || '').toLowerCase();
-        if (/\.(png|jpe?g|gif|webp|bmp|tif|tiff|heic|heif|avif)$/i.test(name)) return true;
-        if (t === 'application/octet-stream' && name) return /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(name);
+        if (IMAGE_FILENAME_EXT_RE.test(name)) return true;
+        if ((t === 'application/octet-stream' || t === '' || t === 'binary/octet-stream') && name) {
+            return IMAGE_FILENAME_EXT_RE.test(name);
+        }
         return false;
     }
 
@@ -772,16 +808,35 @@ const initApp = () => {
 
     function handleFiles(files) {
         if (!activeFrameForUpload) return;
-        
+
+        const list = Array.from(files || []).filter(Boolean);
+        if (list.length === 0) return;
+
+        const accepted = list.filter(isLikelyImageFile);
+        if (accepted.length === 0) {
+            alert(
+                'No supported images were found in that selection.\n\n' +
+                    'Use PNG, JPEG, GIF, WebP, HEIC/HEIF (browser-dependent), SVG, BMP, TIFF, AVIF, or ICO. ' +
+                    'Some screenshots arrive with no file type — try saving as PNG or JPEG and uploading again.'
+            );
+            return;
+        }
+        if (accepted.length < list.length) {
+            console.warn(
+                'MyMotif: skipped',
+                list.length - accepted.length,
+                'file(s) that did not look like supported images.'
+            );
+        }
+
         saveStateSafe(); // Save state before adding images
-        
+
         const frameBody = activeFrameForUpload.querySelector('.frame-body');
         const runBtn = activeFrameForUpload.querySelector('.run-btn');
-        frameBody.classList.add('has-content'); 
+        frameBody.classList.add('has-content');
 
         let offset = 0;
-        Array.from(files).forEach((file) => {
-            if (!isLikelyImageFile(file)) return;
+        accepted.forEach((file) => {
             const reader = new FileReader();
             reader.onerror = () => {
                 console.error('FileReader failed:', file.name);
