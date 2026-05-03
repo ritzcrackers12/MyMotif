@@ -1,4 +1,4 @@
-import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
+import { auth, db, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
 
 const initApp = () => {
     try {
@@ -13,8 +13,11 @@ const initApp = () => {
         const signupBtn = document.getElementById('signup-google-btn');
         const loginBtn = document.getElementById('login-google-btn');
 
+        if (!boardContainer || !canvas || !landingPage) {
+            throw new Error("Missing board DOM (#board-container, #canvas, or #landing-page).");
+        }
 
-        // --- AUTH STATE OBSERVER ---
+        // --- AUTH STATE OBSERVER (single listener) ---
         onAuthStateChanged(auth, async (user) => {
             console.log("Auth State Changed:", user ? "Logged In" : "Logged Out");
             if (user) {
@@ -23,24 +26,30 @@ const initApp = () => {
                 
                 if (userIconBtn) {
                     userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
-                    userIconBtn.title = `Logged in as ${user.displayName}`;
+                    userIconBtn.title = `Logged in as ${user.displayName} (click to sign out)`;
                 }
                 if (saveCloudBtn) saveCloudBtn.style.display = 'block';
                 
                 try {
                     const docSnap = await getDoc(doc(db, "boards", user.uid));
-                    if (docSnap.exists()) {
+                    if (docSnap.exists() && docSnap.data().canvasHTML) {
                         const temp = document.createElement('div');
                         temp.innerHTML = docSnap.data().canvasHTML;
                         const ghost = document.getElementById('ghost-frame');
                         if (ghost) temp.prepend(ghost);
                         canvas.innerHTML = temp.innerHTML;
+                        document.querySelectorAll('#canvas input').forEach((inp) => {
+                            if (inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
+                        });
                     }
                 } catch(e) { console.error("Load Error:", e); }
             } else {
                 landingPage.classList.remove('hidden');
                 landingPage.style.display = 'flex';
-                if (userIconBtn) userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
+                if (userIconBtn) {
+                    userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
+                    userIconBtn.title = 'Log in';
+                }
                 if (saveCloudBtn) saveCloudBtn.style.display = 'none';
             }
         });
@@ -53,7 +62,6 @@ const initApp = () => {
             
             try {
                 console.log("Initiating Popup Auth...");
-                // Set persistence first
                 await setPersistence(auth, browserLocalPersistence);
                 const result = await signInWithPopup(auth, provider);
                 if (result.user) {
@@ -63,7 +71,16 @@ const initApp = () => {
                 }
             } catch (error) {
                 console.error("Auth Error:", error);
-                alert("Login Error: " + (error.code || error.message));
+                const code = error && error.code;
+                if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+                    try {
+                        await signInWithRedirect(auth, provider);
+                    } catch (e2) {
+                        alert("Login Error: " + (e2.code || e2.message));
+                    }
+                } else {
+                    alert("Login Error: " + (code || error.message));
+                }
             } finally {
                 isSigningIn = false;
             }
@@ -149,6 +166,8 @@ const initApp = () => {
         canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
     }
 
+    const historyStack = [];
+
     const getGhostFrame = () => document.getElementById('ghost-frame');
     const getGlobalFileInput = () => document.getElementById('global-file-input');
 
@@ -191,7 +210,7 @@ const initApp = () => {
         }
 
         // Tool Shortcuts (only if not typing)
-        if (document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+        if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
             if (e.key.toLowerCase() === 'v') setTool('select');
             if (e.key.toLowerCase() === 'b') setTool('board');
             if (e.key.toLowerCase() === 'f') setTool('frame');
@@ -202,7 +221,7 @@ const initApp = () => {
         // Delete / Backspace
         if (e.key === 'Backspace' || e.key === 'Delete') {
             // Don't delete if we are typing in an input
-            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
                 return;
             }
             
@@ -1105,87 +1124,43 @@ Respond ONLY with raw JSON (no markdown fences).`
         resultsDiv.classList.remove('hidden');
     }
 
-    // --- FIREBASE LOGIN LOGIC ---
-    
-    // Auth State Observer
-    onAuthStateChanged(auth, async (user) => {
-        if (user) {
-            landingPage.classList.add('hidden');
+    if (saveCloudBtn) {
+        saveCloudBtn.addEventListener('click', async () => {
+            if (!auth.currentUser) return;
+            saveCloudBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
             
-            userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
-            userIconBtn.title = `Logged in as ${user.displayName} (Click to Sign Out)`;
-            saveCloudBtn.style.display = 'block';
-            
-            // Load user's board data from Firestore
             try {
-                const docSnap = await getDoc(doc(db, "boards", user.uid));
-                if (docSnap.exists() && docSnap.data().canvasHTML) {
-                    const temp = document.createElement('div');
-                    temp.innerHTML = docSnap.data().canvasHTML;
-                    // Protect ghost-frame
-                    const ghost = document.getElementById('ghost-frame');
-                    if (ghost) temp.prepend(ghost);
-                    canvas.innerHTML = temp.innerHTML;
-                    
-                    // Resync input attributes so they visually show up
-                    document.querySelectorAll('#canvas input').forEach(inp => {
-                        if(inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
-                    });
+                document.querySelectorAll('#canvas input').forEach(inp => inp.setAttribute('value', inp.value));
+                
+                let ghostHtml = '';
+                const ghost = document.getElementById('ghost-frame');
+                if (ghost && ghost.parentNode === canvas) {
+                    canvas.removeChild(ghost);
+                    ghostHtml = ghost.outerHTML;
                 }
-            } catch(e) {
-                console.error("Error loading board:", e);
-            }
-        } else {
-            userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
-            userIconBtn.title = "Log In";
-            saveCloudBtn.style.display = 'none';
-            landingPage.classList.remove('hidden');
-        }
-    });
-
-    // Save to Cloud
-    saveCloudBtn.addEventListener('click', async () => {
-        if (!auth.currentUser) return;
-        saveCloudBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-        
-        try {
-            // Make sure inputs are serialized
-            document.querySelectorAll('#canvas input').forEach(inp => inp.setAttribute('value', inp.value));
-            
-            // Extract ghost frame temporarily to not save it
-            let ghostHtml = '';
-            const ghost = document.getElementById('ghost-frame');
-            if (ghost && ghost.parentNode === canvas) {
-                canvas.removeChild(ghost);
-                ghostHtml = ghost.outerHTML;
-            }
-            
-            await setDoc(doc(db, "boards", auth.currentUser.uid), {
-                canvasHTML: canvas.innerHTML,
-                updatedAt: new Date()
-            });
-            
-            if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
-            
-            saveCloudBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #10B981;"></i>';
-            setTimeout(() => saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>', 2000);
-        } catch(error) {
-            console.error("Error saving to cloud:", error);
-            saveCloudBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: #EF4444;"></i>';
-            setTimeout(() => saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>', 2000);
-            alert("Failed to save board. Are Firestore rules open?");
-        }
-    });
-
-    // Redirect sign-in return (e.g. GitHub Pages). Loaded dynamically so Safari never hits a missing top-level binding.
-    import("https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js")
-        .then(({ getRedirectResult }) => getRedirectResult(auth))
-        .catch((error) => {
-            console.error("Redirect Result Error:", error);
-            if (error.code !== "auth/cancelled-popup-request") {
-                alert("Login failed during redirect: " + error.message);
+                
+                await setDoc(doc(db, "boards", auth.currentUser.uid), {
+                    canvasHTML: canvas.innerHTML,
+                    updatedAt: new Date()
+                });
+                
+                if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
+                
+                saveCloudBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #10B981;"></i>';
+                setTimeout(() => { saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>'; }, 2000);
+            } catch(error) {
+                console.error("Error saving to cloud:", error);
+                saveCloudBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: #EF4444;"></i>';
+                setTimeout(() => { saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>'; }, 2000);
+                alert("Failed to save board. Are Firestore rules open?");
             }
         });
+    }
+
+    // Full-page redirect return (used when popup auth is blocked, e.g. Safari). Property access avoids WebKit/destructuring quirks.
+    void import("https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js")
+        .then((mod) => mod.getRedirectResult(auth))
+        .catch((err) => console.warn("[MyMotif] redirect result:", err));
 
     console.log("My Motif: App Initialized & Listeners Attached.");
     } catch (e) {
