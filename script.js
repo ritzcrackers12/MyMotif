@@ -1,4 +1,5 @@
-import { auth, db, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
+import { auth, db, provider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
+
 
 
 const initApp = () => {
@@ -1182,7 +1183,10 @@ Respond ONLY with raw JSON (no markdown fences).`
     
     if (signupBtn) signupBtn.addEventListener('click', doGoogleSignIn);
     if (loginBtn) loginBtn.addEventListener('click', doGoogleSignIn);
+
+    console.log("My Motif: App Initialized & Listeners Attached.");
 };
+
 
 
 if (document.readyState === 'loading') {
