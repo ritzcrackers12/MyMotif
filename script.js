@@ -5,6 +5,7 @@ import {
     ref,
     uploadBytes,
     getDownloadURL,
+    getBlob,
     provider,
     signInWithPopup,
     signInWithRedirect,
@@ -83,6 +84,12 @@ const initApp = async () => {
                 canvas.removeChild(ghost);
                 ghostHtml = ghost.outerHTML;
             }
+            const imgs = document.querySelectorAll('.motif-image-node img[data-download-url]');
+            const srcBackup = [];
+            imgs.forEach((img) => {
+                srcBackup.push({ img, prev: img.getAttribute('src') });
+                img.setAttribute('src', img.dataset.downloadUrl);
+            });
             try {
                 await setDoc(
                     doc(db, "boards", auth.currentUser.uid),
@@ -93,6 +100,10 @@ const initApp = async () => {
                     { merge: true }
                 );
             } finally {
+                srcBackup.forEach(({ img, prev }) => {
+                    if (prev) img.setAttribute('src', prev);
+                    else img.removeAttribute('src');
+                });
                 if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
             }
         }
@@ -104,6 +115,38 @@ const initApp = async () => {
                 cloudSaveTimer = null;
                 persistBoardToCloud({ silent: true }).catch((err) => console.warn("Auto-save:", err));
             }, 2800);
+        }
+
+        /**
+         * After loading canvas HTML from Firestore, replace Storage HTTPS img src with an authenticated
+         * getBlob() object URL (rules often require auth; plain <img src=downloadURL> has no ID token).
+         */
+        async function rehydrateMotifImagesAfterCloudLoad() {
+            if (!auth.currentUser) return;
+            const nodes = canvas.querySelectorAll('.motif-image-node[data-storage-path]');
+            await Promise.all(
+                [...nodes].map(async (node) => {
+                    const path = (node.dataset.storagePath || '').trim();
+                    const img = node.querySelector('img');
+                    if (!path || !img) return;
+                    let persisted = (img.dataset.downloadUrl || '').trim();
+                    if (!persisted) {
+                        const cur = (img.getAttribute('src') || '').trim();
+                        if (cur.includes('firebasestorage')) persisted = cur;
+                    }
+                    if (!persisted) return;
+                    img.dataset.downloadUrl = persisted;
+                    try {
+                        const prev = img.src.startsWith('blob:') ? img.src : null;
+                        if (prev) URL.revokeObjectURL(prev);
+                        const b = await getBlob(ref(storage, path));
+                        img.src = URL.createObjectURL(b);
+                    } catch (e) {
+                        console.warn('MyMotif: rehydrate image from Storage failed', path, e);
+                    }
+                })
+            );
+            canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
         }
 
         /** Run Analysis is enabled only when every image in the frame uses a Firebase Storage download URL. */
@@ -118,6 +161,10 @@ const initApp = async () => {
             }
             const allFromStorage = [...imgs].every((im) => {
                 const u = (im.getAttribute('src') || '').trim();
+                const persisted = (im.dataset.downloadUrl || '').trim();
+                const hasPersisted =
+                    persisted.includes('firebasestorage.googleapis.com') || persisted.includes('firebasestorage');
+                if (u.startsWith('blob:') && hasPersisted) return true;
                 return (
                     u.startsWith('https://firebasestorage.googleapis.com') ||
                     (u.startsWith('https://') && u.includes('firebasestorage'))
@@ -180,7 +227,7 @@ const initApp = async () => {
                         });
                         rehydrateAnalysisCardsFromDom();
                         canvas.querySelectorAll('.frame-body').forEach(ensureFrameUploadLabel);
-                        canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
+                        await rehydrateMotifImagesAfterCloudLoad();
                     }
                 } catch (e) {
                     console.error("Load Error:", e);
@@ -995,10 +1042,12 @@ const initApp = async () => {
                     const storageRef = ref(storage, storagePath);
                     await uploadBytes(storageRef, blob, { contentType: 'image/jpeg' });
                     const downloadURL = await getDownloadURL(storageRef);
+                    const displayBlob = await getBlob(storageRef);
 
                     imgNode.innerHTML = '';
                     const imgEl = document.createElement('img');
-                    imgEl.src = downloadURL;
+                    imgEl.src = URL.createObjectURL(displayBlob);
+                    imgEl.dataset.downloadUrl = downloadURL;
                     imgEl.alt = '';
                     const resizeHandle = document.createElement('div');
                     resizeHandle.className = 'image-resize-handle';
@@ -1511,7 +1560,7 @@ const initApp = async () => {
         }
 
         for (const { img } of imageRecords) {
-            const u = (img.getAttribute('src') || '').trim();
+            const u = ((img.dataset && img.dataset.downloadUrl) || img.getAttribute('src') || '').trim();
             if (!u.startsWith('https://') || !u.includes('firebasestorage')) {
                 alert(
                     'Every image must finish uploading to Firebase Storage before analysis. Sign in, add images again, and wait until Run Analysis highlights when ready.'
@@ -1541,14 +1590,15 @@ const initApp = async () => {
             contextText = `The user's project context and goals:\n${contexts.map((c) => `- ${c}`).join('\n')}\n`;
         }
 
-        const storageUrlLines = imageRecords.map(
-            (r, i) => `Image ${i + 1}: ${(r.img.getAttribute('src') || '').trim()}`
-        );
+        const storageUrlLines = imageRecords.map((r, i) => {
+            const u = (r.img.dataset.downloadUrl || r.img.getAttribute('src') || '').trim();
+            return `Image ${i + 1}: ${u}`;
+        });
         const urlIndexText = `Firebase Storage download URLs for this analysis (image bytes follow in the same order):\n${storageUrlLines.join('\n')}\n`;
 
         const imageParts = [];
         for (const { img } of imageRecords) {
-            const url = (img.getAttribute('src') || '').trim();
+            const url = (img.dataset.downloadUrl || img.getAttribute('src') || '').trim();
             try {
                 const res = await fetch(url, { mode: 'cors' });
                 if (!res.ok) {

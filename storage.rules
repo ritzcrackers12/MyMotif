@@ -1,4 +1,7 @@
 rules_version = '2';
+// Note: <img src="getDownloadURL()"> does NOT send Firebase Auth. The app uses getBlob() + blob: URLs
+// for display and swaps in HTTPS URLs only when saving to Firestore. Reads here still require auth
+// so only the SDK (signed-in user) can load bytes.
 service firebase.storage {
   match /b/{bucket}/o {
     // Board images: only the signed-in owner can read/write their prefix.
