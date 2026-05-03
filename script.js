@@ -1136,17 +1136,27 @@ Analyze all ${imageParts.length} images together as a collection. Use the user's
     });
 
     // Google Sign In / Sign Up
+    let isSigningIn = false;
     googleLoginBtns.forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.preventDefault();
+            e.stopPropagation();
+            if (isSigningIn) return; // Prevent duplicate popups
+            isSigningIn = true;
+            
+            const originalHTML = btn.innerHTML;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
             try {
                 await signInWithPopup(auth, provider);
                 // onAuthStateChanged handles the success automatically
             } catch (error) {
-                console.error("Error signing in with Google: ", error);
-                alert(`Firebase Auth Error!\nCode: ${error.code}\nMessage: ${error.message}`);
-                btn.innerHTML = '<i class="fa-brands fa-google"></i> Sign Up with Google';
+                if (error.code !== 'auth/cancelled-popup-request' && error.code !== 'auth/popup-closed-by-user') {
+                    console.error("Error signing in with Google: ", error);
+                    alert(`Sign-in error: ${error.message}`);
+                }
+                btn.innerHTML = originalHTML;
+            } finally {
+                isSigningIn = false;
             }
         });
     });
