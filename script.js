@@ -1127,7 +1127,7 @@ Respond ONLY with raw JSON (no markdown fences).`
     });
 
     // Login Trigger (Top Bar)
-    userIconBtn.addEventListener('click', () => {
+    userIconBtn.addEventListener('click', (e) => {
         if (auth.currentUser) {
             // If already logged in, clicking the avatar signs them out
             if(confirm("Do you want to sign out?")) {
@@ -1136,30 +1136,43 @@ Respond ONLY with raw JSON (no markdown fences).`
                 document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
                 saveStateSafe(); // reset history
             }
+        } else {
+            // If NOT logged in, trigger Google Sign In
+            doGoogleSignIn(e);
         }
     });
 
     // Google Sign In / Sign Up — single handler to prevent duplicate popups
     let isSigningIn = false;
     async function doGoogleSignIn(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
         if (isSigningIn) return;
         isSigningIn = true;
+        
         try {
+            console.log("Starting Google Sign In...");
             await signInWithPopup(auth, provider);
+            console.log("Sign in successful");
         } catch (error) {
+            console.error("Sign-in error details:", error);
             if (error.code !== 'auth/cancelled-popup-request' && error.code !== 'auth/popup-closed-by-user') {
-                console.error("Sign-in error:", error);
-                alert("Sign-in failed: " + error.message);
+                alert("Sign-in failed: " + (error.message || "Unknown error"));
             }
         } finally {
             isSigningIn = false;
         }
     }
-    document.getElementById('signup-google-btn').addEventListener('click', doGoogleSignIn);
-    document.getElementById('login-google-btn').addEventListener('click', doGoogleSignIn);
+
+    const signupBtn = document.getElementById('signup-google-btn');
+    const loginBtn = document.getElementById('login-google-btn');
+    
+    if (signupBtn) signupBtn.addEventListener('click', doGoogleSignIn);
+    if (loginBtn) loginBtn.addEventListener('click', doGoogleSignIn);
 };
+
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApp);
