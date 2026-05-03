@@ -5,11 +5,14 @@ const initApp = () => {
         console.log("My Motif: Starting Robust Boot...");
         const boardContainer = document.getElementById('board-container');
         const canvas = document.getElementById('canvas');
+        const ghostFrame = document.getElementById('ghost-frame');
+        const globalFileInput = document.getElementById('global-file-input');
         const landingPage = document.getElementById('landing-page');
         const userIconBtn = document.querySelector('.login-trigger');
         const saveCloudBtn = document.getElementById('save-cloud-btn');
         const signupBtn = document.getElementById('signup-google-btn');
         const loginBtn = document.getElementById('login-google-btn');
+
 
         // --- AUTH STATE OBSERVER ---
         onAuthStateChanged(auth, async (user) => {
