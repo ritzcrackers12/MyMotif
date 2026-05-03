@@ -42,7 +42,15 @@ const initApp = () => {
                             if (inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
                         });
                     }
-                } catch(e) { console.error("Load Error:", e); }
+                } catch (e) {
+                    console.error("Load Error:", e);
+                    const msg = String(e && e.message || e);
+                    if (e?.code === "unavailable" || e?.code === "not-found" || msg.includes("not-found") || msg.includes("offline")) {
+                        console.warn(
+                            "MyMotif: Cloud Firestore is not reachable. In Firebase Console open project \"mymotiffinal\" → Build → Firestore Database → Create database (if you have not). Then publish rules that allow signed-in users to read/write documents under boards/{theirUid}."
+                        );
+                    }
+                }
             } else {
                 landingPage.classList.remove('hidden');
                 landingPage.style.display = 'flex';
