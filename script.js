@@ -263,18 +263,20 @@ const initApp = () => {
             dragStartX = pointerX;
             dragStartY = pointerY;
             
-            ghostFrameEl.style.display = 'block';
-            ghostFrameEl.style.left = dragStartX + 'px';
-            ghostFrameEl.style.top = dragStartY + 'px';
-            ghostFrameEl.style.width = '0px';
-            ghostFrameEl.style.height = '0px';
+            const ghost = getGhostFrame();
+            ghost.style.display = 'block';
+            ghost.style.left = dragStartX + 'px';
+            ghost.style.top = dragStartY + 'px';
+            ghost.style.width = '0px';
+            ghost.style.height = '0px';
             if (currentTool === 'board') {
-                ghostFrameEl.style.borderStyle = 'dashed';
-                ghostFrameEl.style.background = 'rgba(243, 244, 246, 0.4)';
+                ghost.style.borderStyle = 'dashed';
+                ghost.style.background = 'rgba(243, 244, 246, 0.4)';
             } else {
-                ghostFrameEl.style.borderStyle = 'solid';
-                ghostFrameEl.style.background = 'rgba(107, 92, 231, 0.1)';
+                ghost.style.borderStyle = 'solid';
+                ghost.style.background = 'rgba(107, 92, 231, 0.1)';
             }
+
             
             deselectAll();
             return;
@@ -453,10 +455,12 @@ const initApp = () => {
             const left = Math.min(pointerX, dragStartX);
             const top = Math.min(pointerY, dragStartY);
             
-            ghostFrameEl.style.left = left + 'px';
-            ghostFrameEl.style.top = top + 'px';
-            ghostFrameEl.style.width = width + 'px';
-            ghostFrameEl.style.height = height + 'px';
+            const ghost = getGhostFrame();
+            ghost.style.left = left + 'px';
+            ghost.style.top = top + 'px';
+            ghost.style.width = width + 'px';
+            ghost.style.height = height + 'px';
+
             return;
         }
 
@@ -502,12 +506,14 @@ const initApp = () => {
 
         if (isDrawing) {
             isDrawing = false;
-            ghostFrameEl.style.display = 'none';
+            const ghost = getGhostFrame();
+            ghost.style.display = 'none';
             
-            const width = parseFloat(ghostFrameEl.style.width);
-            const height = parseFloat(ghostFrameEl.style.height);
-            const left = parseFloat(ghostFrameEl.style.left);
-            const top = parseFloat(ghostFrameEl.style.top);
+            const width = parseFloat(ghost.style.width);
+            const height = parseFloat(ghost.style.height);
+            const left = parseFloat(ghost.style.left);
+            const top = parseFloat(ghost.style.top);
+
             
             if (width > 50 && height > 50) {
                 saveStateSafe(); // Save before creating
