@@ -143,6 +143,15 @@ const initApp = () => {
             return;
         }
 
+        // Tool Shortcuts (only if not typing)
+        if (document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+            if (e.key.toLowerCase() === 'v') setTool('select');
+            if (e.key.toLowerCase() === 'b') setTool('board');
+            if (e.key.toLowerCase() === 'f') setTool('frame');
+            if (e.key.toLowerCase() === 'c') setTool('comment');
+        }
+
+
         // Delete / Backspace
         if (e.key === 'Backspace' || e.key === 'Delete') {
             // Don't delete if we are typing in an input
@@ -807,18 +816,21 @@ const initApp = () => {
         const runBtn = parentNode.querySelector('.run-btn');
         // Allow run if there are images (we check below)
         
-        // Collect all images from the frame (or from all frames inside a board)
+        // Collect all images and data
         let imageElements = [];
+        let containedFrames = [];
+        
         if (isBoard) {
-            const frames = getContainedNodes(parentNode);
-            if (frames.length === 0) {
+            containedFrames = getContainedNodes(parentNode);
+            if (containedFrames.length === 0) {
                 alert("Add some frames with images to the board first!");
                 return;
             }
-            frames.forEach(f => {
+            containedFrames.forEach(f => {
                 f.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
             });
         } else {
+            containedFrames = [parentNode];
             parentNode.querySelectorAll('.motif-image-node img').forEach(img => imageElements.push(img));
         }
 
@@ -836,41 +848,30 @@ const initApp = () => {
         // Spawn card with loading state
         const card = spawnAnalysisCard(title, px + pw + 40, py);
 
-        // Collect user comments from image nodes
-        const allImageNodes = isBoard 
-            ? Array.from(parentNode.querySelectorAll('.motif-frame .motif-image-node'))
-                .concat(Array.from(document.querySelectorAll('.motif-frame')).filter(f => {
-                    // only frames inside this board
-                    const fb = f.getBoundingClientRect();
-                    const bb = parentNode.getBoundingClientRect();
-                    return fb.left >= bb.left && fb.right <= bb.right && fb.top >= bb.top && fb.bottom <= bb.bottom;
-                }).flatMap(f => Array.from(f.querySelectorAll('.motif-image-node'))))
-            : Array.from(parentNode.querySelectorAll('.motif-image-node'));
-        
+        // Collect user comments from image nodes within the relevant frames
         const comments = [];
-        allImageNodes.forEach((node, i) => {
-            if (node.dataset.comment) {
-                comments.push(`Image ${i + 1}: "${node.dataset.comment}"`);
-            }
+        containedFrames.forEach(frame => {
+            frame.querySelectorAll('.motif-image-node').forEach((node, i) => {
+                if (node.dataset.comment) {
+                    comments.push(`Image in "${frame.querySelector('.frame-title')?.value || 'Frame'}": "${node.dataset.comment}"`);
+                }
+            });
         });
+
         const commentsText = comments.length > 0 
-            ? `\nThe user left these comments about what they like in specific images:\n${comments.join('\n')}\n`
+            ? `\nThe user left these comments about specific images to guide your analysis:\n${comments.join('\n')}\n`
             : '';
 
-        // Collect frame context
+        // Collect frame context from the relevant frames
         let contextText = '';
-        if (!isBoard && parentNode.dataset.context) {
-            contextText = `The user's project context: "${parentNode.dataset.context}"\n`;
-        } else if (isBoard) {
-            // Check if any contained frame has context
-            const framesWithContext = [];
-            document.querySelectorAll('.motif-frame').forEach(f => {
-                if (f.dataset.context) framesWithContext.push(f.dataset.context);
-            });
-            if (framesWithContext.length > 0) {
-                contextText = `The user's project context: "${framesWithContext.join('; ')}"\n`;
-            }
+        const contexts = containedFrames
+            .map(f => f.dataset.context)
+            .filter(ctx => !!ctx);
+            
+        if (contexts.length > 0) {
+            contextText = `The user's project context and goals:\n${contexts.map(c => `- ${c}`).join('\n')}\n`;
         }
+
 
         // Extract base64 data from all <img> src attributes
         const imageParts = [];
@@ -901,19 +902,23 @@ const initApp = () => {
                 parts: [
                     ...imageParts,
                     {
-                        text: `You are a design analyst helping a user discover their personal "motif" — the recurring visual themes, patterns, and aesthetic preferences across the images they've collected.
+                        text: `You are an expert Design Strategist and Aesthetic Researcher. Your task is to analyze a collection of images and identify the user's "Motif" — the underlying visual DNA and stylistic patterns.
 
-${contextText}${commentsText}
+${contextText}
+${commentsText}
 
-Analyze all ${imageParts.length} images together as a collection. Use the user's context and comments to deliver deeply personalized insights. Respond in this EXACT JSON format (no markdown, no code fences, just raw JSON):
-{
-  "commonalities": ["list 3-5 specific visual commonalities you see across these images"],
-  "aesthetic": "A 2-3 sentence description of the overall aesthetic/design movement this collection aligns with. Name specific design movements or styles.",
-  "palette": ["list 4-6 dominant colors as hex codes"],
-  "features_to_look_for": ["list 3-5 specific design features or elements the user seems drawn to that they should look for in future inspiration"],
-  "recommendation": "A 2-3 sentence actionable recommendation for how the user should approach their project based on their style preferences and the context they provided.",
-  "search_queries": ["list 4-6 search terms the user could use to find more images like these"]
-}`
+Analyze all ${imageParts.length} images as a unified design collection. Focus on visual metaphors, material qualities, lighting, and composition. 
+
+Return a JSON object with these exact keys:
+- "commonalities": (Array) 3-5 high-level visual themes or recurring elements.
+- "aesthetic": (String) A sophisticated 2-3 sentence breakdown of the design movement (e.g., Bauhaus, Memphis, Brutalism, Organic Modernism) and its historical/emotional vibe.
+- "palette": (Array) 5-6 dominant hex codes that capture the mood.
+- "features_to_look_for": (Array) 3-5 specific stylistic markers the user should seek out (e.g., "High-contrast grain," "Asymmetric balance," "Saturated geometric shapes").
+- "recommendation": (String) 2-3 sentences of expert advice on how to apply these motifs to their project context.
+- "search_queries": (Array) 4-6 precise terms for finding more inspiration.
+
+Respond ONLY with raw JSON (no markdown fences).`
+
                     }
                 ]
             }],
