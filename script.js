@@ -1,26 +1,22 @@
-import { auth, db, provider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
-
-
+import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
 
 const initApp = () => {
     try {
-        console.log("My Motif: Starting Safe Boot...");
+        console.log("My Motif: Starting Robust Boot...");
         const boardContainer = document.getElementById('board-container');
         const canvas = document.getElementById('canvas');
-        const ghostFrame = document.getElementById('ghost-frame');
-        const globalFileInput = document.getElementById('global-file-input');
         const landingPage = document.getElementById('landing-page');
         const userIconBtn = document.querySelector('.login-trigger');
         const saveCloudBtn = document.getElementById('save-cloud-btn');
         const signupBtn = document.getElementById('signup-google-btn');
         const loginBtn = document.getElementById('login-google-btn');
 
-        // --- AUTH STATE OBSERVER (MOVED TO TOP) ---
+        // --- AUTH STATE OBSERVER ---
         onAuthStateChanged(auth, async (user) => {
-            console.log("Auth State Changed:", user ? "Logged In (" + user.email + ")" : "Logged Out");
+            console.log("Auth State Changed:", user ? "Logged In" : "Logged Out");
             if (user) {
                 landingPage.classList.add('hidden');
-                landingPage.style.display = 'none'; // Force hide
+                landingPage.style.display = 'none';
                 
                 userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
                 userIconBtn.title = `Logged in as ${user.displayName}`;
@@ -28,52 +24,41 @@ const initApp = () => {
                 
                 try {
                     const docSnap = await getDoc(doc(db, "boards", user.uid));
-                    if (docSnap.exists() && docSnap.data().canvasHTML) {
+                    if (docSnap.exists()) {
                         const temp = document.createElement('div');
                         temp.innerHTML = docSnap.data().canvasHTML;
                         const ghost = document.getElementById('ghost-frame');
                         if (ghost) temp.prepend(ghost);
                         canvas.innerHTML = temp.innerHTML;
-                        document.querySelectorAll('#canvas input').forEach(inp => {
-                            if(inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
-                        });
                     }
-                } catch(e) { console.error("Error loading board:", e); }
+                } catch(e) { console.error("Load Error:", e); }
             } else {
-                userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
-                userIconBtn.title = "Log In";
-                saveCloudBtn.style.display = 'none';
                 landingPage.classList.remove('hidden');
-                landingPage.style.display = 'flex'; // Ensure visible
+                landingPage.style.display = 'flex';
+                userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
+                saveCloudBtn.style.display = 'none';
             }
-        });
-
-        // Handle the redirect result immediately
-        getRedirectResult(auth).then((result) => {
-            if (result && result.user) {
-                console.log("Redirect login success:", result.user.email);
-                landingPage.classList.add('hidden');
-                landingPage.style.display = 'none';
-            }
-        }).catch(error => {
-            console.error("Redirect Error:", error);
         });
 
         let isSigningIn = false;
         async function doGoogleSignIn(e) {
-            if (e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
+            if (e) { e.preventDefault(); e.stopPropagation(); }
             if (isSigningIn) return;
             isSigningIn = true;
             
             try {
-                console.log("Starting Redirect Flow...");
-                await signInWithRedirect(auth, provider);
+                console.log("Initiating Popup Auth...");
+                // Set persistence first
+                await setPersistence(auth, browserLocalPersistence);
+                const result = await signInWithPopup(auth, provider);
+                if (result.user) {
+                    console.log("Login Success!");
+                    landingPage.classList.add('hidden');
+                    landingPage.style.display = 'none';
+                }
             } catch (error) {
                 console.error("Auth Error:", error);
-                alert("Auth Error: " + (error.code || error.message));
+                alert("Login Error: " + (error.code || error.message));
             } finally {
                 isSigningIn = false;
             }
@@ -84,16 +69,16 @@ const initApp = () => {
         if (userIconBtn) {
             userIconBtn.addEventListener('click', (e) => {
                 if (auth.currentUser) {
-                    if(confirm("Do you want to sign out?")) {
+                    if(confirm("Sign out?")) {
                         signOut(auth);
-                        document.querySelectorAll('.motif-board, .motif-frame, .analysis-card').forEach(el => el.remove());
-                        saveStateSafe();
+                        location.reload();
                     }
                 } else {
                     doGoogleSignIn(e);
                 }
             });
         }
+
 
     
     let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
