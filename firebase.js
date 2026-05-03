@@ -4,13 +4,6 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRe
 
 
 import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
-import {
-    getStorage,
-    ref,
-    uploadBytes,
-    getDownloadURL,
-    getBlob
-} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-storage.js";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -27,7 +20,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ prompt: 'select_account' });
 
@@ -35,11 +27,6 @@ provider.setCustomParameters({ prompt: 'select_account' });
 export {
     auth,
     db,
-    storage,
-    ref,
-    uploadBytes,
-    getDownloadURL,
-    getBlob,
     provider,
     signInWithPopup,
     signInWithRedirect,

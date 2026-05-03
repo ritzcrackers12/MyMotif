@@ -1,11 +1,6 @@
 import {
     auth,
     db,
-    storage,
-    ref,
-    uploadBytes,
-    getDownloadURL,
-    getBlob,
     provider,
     signInWithPopup,
     signInWithRedirect,
@@ -84,12 +79,6 @@ const initApp = async () => {
                 canvas.removeChild(ghost);
                 ghostHtml = ghost.outerHTML;
             }
-            const imgs = document.querySelectorAll('.motif-image-node img[data-download-url]');
-            const srcBackup = [];
-            imgs.forEach((img) => {
-                srcBackup.push({ img, prev: img.getAttribute('src') });
-                img.setAttribute('src', img.dataset.downloadUrl);
-            });
             try {
                 await setDoc(
                     doc(db, "boards", auth.currentUser.uid),
@@ -100,10 +89,6 @@ const initApp = async () => {
                     { merge: true }
                 );
             } finally {
-                srcBackup.forEach(({ img, prev }) => {
-                    if (prev) img.setAttribute('src', prev);
-                    else img.removeAttribute('src');
-                });
                 if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
             }
         }
@@ -115,63 +100,6 @@ const initApp = async () => {
                 cloudSaveTimer = null;
                 persistBoardToCloud({ silent: true }).catch((err) => console.warn("Auto-save:", err));
             }, 2800);
-        }
-
-        /**
-         * After loading canvas HTML from Firestore, replace Storage HTTPS img src with an authenticated
-         * getBlob() object URL (rules often require auth; plain <img src=downloadURL> has no ID token).
-         */
-        async function rehydrateMotifImagesAfterCloudLoad() {
-            if (!auth.currentUser) return;
-            const nodes = canvas.querySelectorAll('.motif-image-node[data-storage-path]');
-            await Promise.all(
-                [...nodes].map(async (node) => {
-                    const path = (node.dataset.storagePath || '').trim();
-                    const img = node.querySelector('img');
-                    if (!path || !img) return;
-                    let persisted = (img.dataset.downloadUrl || '').trim();
-                    if (!persisted) {
-                        const cur = (img.getAttribute('src') || '').trim();
-                        if (cur.includes('firebasestorage')) persisted = cur;
-                    }
-                    if (!persisted) return;
-                    img.dataset.downloadUrl = persisted;
-                    try {
-                        const prev = img.src.startsWith('blob:') ? img.src : null;
-                        if (prev) URL.revokeObjectURL(prev);
-                        const b = await getBlob(ref(storage, path));
-                        img.src = URL.createObjectURL(b);
-                    } catch (e) {
-                        console.warn('MyMotif: rehydrate image from Storage failed', path, e);
-                    }
-                })
-            );
-            canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
-        }
-
-        /** Run Analysis is enabled only when every image in the frame uses a Firebase Storage download URL. */
-        function syncFrameRunButton(frameEl) {
-            if (!frameEl || !frameEl.classList.contains('motif-frame')) return;
-            const runBtn = frameEl.querySelector('.run-btn');
-            if (!runBtn) return;
-            const imgs = frameEl.querySelectorAll('.motif-image-node img');
-            if (imgs.length === 0) {
-                runBtn.classList.remove('ready');
-                return;
-            }
-            const allFromStorage = [...imgs].every((im) => {
-                const u = (im.getAttribute('src') || '').trim();
-                const persisted = (im.dataset.downloadUrl || '').trim();
-                const hasPersisted =
-                    persisted.includes('firebasestorage.googleapis.com') || persisted.includes('firebasestorage');
-                if (u.startsWith('blob:') && hasPersisted) return true;
-                return (
-                    u.startsWith('https://firebasestorage.googleapis.com') ||
-                    (u.startsWith('https://') && u.includes('firebasestorage'))
-                );
-            });
-            if (allFromStorage) runBtn.classList.add('ready');
-            else runBtn.classList.remove('ready');
         }
 
         document.addEventListener("visibilitychange", () => {
@@ -227,7 +155,6 @@ const initApp = async () => {
                         });
                         rehydrateAnalysisCardsFromDom();
                         canvas.querySelectorAll('.frame-body').forEach(ensureFrameUploadLabel);
-                        await rehydrateMotifImagesAfterCloudLoad();
                     }
                 } catch (e) {
                     console.error("Load Error:", e);
@@ -402,7 +329,6 @@ const initApp = async () => {
             canvas.innerHTML = historyStack.pop();
             if (ghost) canvas.prepend(ghost);
             deselectAll();
-            canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
         }
         scheduleCloudSave();
     }
@@ -436,13 +362,7 @@ const initApp = async () => {
             const selectedElements = document.querySelectorAll('.selected');
             if (selectedElements.length > 0) {
                 saveStateSafe();
-                const framesToSync = new Set();
-                selectedElements.forEach((el) => {
-                    const fr = el.closest('.motif-frame');
-                    if (fr) framesToSync.add(fr);
-                    el.remove();
-                });
-                framesToSync.forEach(syncFrameRunButton);
+                selectedElements.forEach(el => el.remove());
             }
         }
     });
@@ -886,12 +806,12 @@ const initApp = async () => {
             e.preventDefault();
             frameBody.style.background = 'transparent';
             activeFrameForUpload = frameBody.closest('.motif-frame');
-            void handleFiles(e.dataTransfer.files);
+            handleFiles(e.dataTransfer.files);
         }
     });
 
     globalFileInput.addEventListener('change', (e) => {
-        if (activeFrameForUpload) void handleFiles(e.target.files);
+        if (activeFrameForUpload) handleFiles(e.target.files);
         globalFileInput.value = '';
     });
 
@@ -946,31 +866,8 @@ const initApp = async () => {
         });
     }
 
-    function uint8ToBase64(bytes) {
-        const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        let binary = '';
-        const chunk = 0x8000;
-        for (let i = 0; i < arr.length; i += chunk) {
-            binary += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + chunk, arr.length)));
-        }
-        return btoa(binary);
-    }
-
-    function readFileAsDataURL(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('Could not read file'));
-            reader.readAsDataURL(file);
-        });
-    }
-
-    async function handleFiles(files) {
+    function handleFiles(files) {
         if (!activeFrameForUpload) return;
-        if (!auth.currentUser) {
-            alert('Sign in to add images. Files upload to Firebase Storage and your board saves to Firestore.');
-            return;
-        }
 
         const list = Array.from(files || []).filter(Boolean);
         if (list.length === 0) return;
@@ -992,91 +889,80 @@ const initApp = async () => {
             );
         }
 
-        const frame = activeFrameForUpload;
-        const frameBody = frame.querySelector('.frame-body');
-        const runBtn = frame.querySelector('.run-btn');
-        runBtn.classList.remove('ready');
+        saveStateSafe(); // Save state before adding images
 
-        saveStateSafe();
+        const frameBody = activeFrameForUpload.querySelector('.frame-body');
+        const runBtn = activeFrameForUpload.querySelector('.run-btn');
         frameBody.classList.add('has-content');
 
-        const fw = frame.offsetWidth;
-        const fh = frame.offsetHeight;
-        const baseSlot = Math.min(fw, fh) * 0.4;
-
-        const uid = auth.currentUser.uid;
-        const uploadFailures = [];
-
-        await Promise.all(
-            accepted.map(async (file, idx) => {
-                const offset = idx * 20;
+        let offset = 0;
+        accepted.forEach((file) => {
+            const reader = new FileReader();
+            reader.onerror = () => {
+                console.error('FileReader failed:', file.name);
+                alert(`Could not read file: ${file.name || 'image'}`);
+            };
+            reader.onload = async (e) => {
                 const imgNode = document.createElement('div');
                 imgNode.className = 'motif-image-node';
-                const size = baseSlot;
+                
+                const fw = activeFrameForUpload.offsetWidth;
+                const fh = activeFrameForUpload.offsetHeight;
+                const size = Math.min(fw, fh) * 0.4; 
+                
                 imgNode.style.width = size + 'px';
                 imgNode.style.height = size + 'px';
-                imgNode.style.left = fw / 2 - size / 2 + offset + 'px';
-                imgNode.style.top = fh / 2 - size / 2 + offset + 'px';
+                imgNode.style.left = (fw / 2 - size / 2 + offset) + 'px';
+                imgNode.style.top = (fh / 2 - size / 2 + offset) + 'px';
+                offset += 20; 
+                
+                // Show a loading state
                 imgNode.innerHTML = `
                     <div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#eee;">
                         <i class="fa-solid fa-spinner fa-spin" style="color:var(--accent);"></i>
                     </div>
                 `;
                 frameBody.appendChild(imgNode);
-
+                
                 try {
-                    const rawDataUrl = await readFileAsDataURL(file);
-                    const result = await compressImage(rawDataUrl);
+                    // Compress the image locally to avoid hitting Firestore 1MB limits
+                    const result = await compressImage(e.target.result);
+                    const compressedUrl = result.url;
                     const aspectRatio = result.aspectRatio;
-                    const baseSize = Math.min(frame.offsetWidth, frame.offsetHeight) * 0.4;
+                    
+                    const fw = activeFrameForUpload.offsetWidth;
+                    const fh = activeFrameForUpload.offsetHeight;
+                    const baseSize = Math.min(fw, fh) * 0.4; 
+                    
+                    // Adjust node size to match real aspect ratio
                     if (aspectRatio > 1) {
                         imgNode.style.width = baseSize + 'px';
-                        imgNode.style.height = baseSize / aspectRatio + 'px';
+                        imgNode.style.height = (baseSize / aspectRatio) + 'px';
                     } else {
                         imgNode.style.height = baseSize + 'px';
-                        imgNode.style.width = baseSize * aspectRatio + 'px';
+                        imgNode.style.width = (baseSize * aspectRatio) + 'px';
                     }
-
-                    const storagePath = `boards/${uid}/canvasImages/${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 11)}.jpg`;
-                    const blob = await fetch(result.url).then((r) => r.blob());
-                    const storageRef = ref(storage, storagePath);
-                    await uploadBytes(storageRef, blob, { contentType: 'image/jpeg' });
-                    const downloadURL = await getDownloadURL(storageRef);
-                    const displayBlob = await getBlob(storageRef);
-
-                    imgNode.innerHTML = '';
-                    const imgEl = document.createElement('img');
-                    imgEl.src = URL.createObjectURL(displayBlob);
-                    imgEl.dataset.downloadUrl = downloadURL;
-                    imgEl.alt = '';
-                    const resizeHandle = document.createElement('div');
-                    resizeHandle.className = 'image-resize-handle';
-                    const dragHandle = document.createElement('div');
-                    dragHandle.className = 'individual-drag-handle';
-                    dragHandle.title = 'Move Individually';
-                    imgNode.append(imgEl, resizeHandle, dragHandle);
-                    imgNode.dataset.storagePath = storagePath;
-                    imgNode.dataset.storageUrl = downloadURL;
+                    
+                    imgNode.innerHTML = `
+                        <img src="${compressedUrl}">
+                        <div class="image-resize-handle"></div>
+                        <div class="individual-drag-handle" title="Move Individually"></div>
+                    `;
+                    runBtn.classList.add('ready');
+                    scheduleCloudSave();
                 } catch (error) {
-                    console.error('Image upload failed:', error);
-                    uploadFailures.push(file.name || 'image');
+                    console.error('Image processing failed:', error);
                     imgNode.remove();
+                    alert(
+                        `Could not process "${file.name || 'image'}".\n` +
+                            (error && error.message
+                                ? error.message
+                                : 'Try PNG or JPEG. HEIC may not work in all browsers.')
+                    );
                 }
-            })
-        );
-
-        if (uploadFailures.length) {
-            alert(
-                `Could not upload: ${uploadFailures.join(', ')}\n` +
-                    (uploadFailures.length === accepted.length
-                        ? 'Check Firebase Storage rules and network.'
-                        : 'Other images finished uploading.')
-            );
-        }
-
-        syncFrameRunButton(frame);
-        await persistBoardToCloud({ silent: true }).catch((err) => console.warn('Save after upload:', err));
-        scheduleCloudSave();
+            };
+            reader.readAsDataURL(file);
+        });
     }
 
     // On-Canvas Analysis Card Logic
@@ -1515,6 +1401,70 @@ const initApp = async () => {
         return '';
     }
 
+    /** Parse data: URLs for Gemini (handles image/svg+xml, charset, etc.). */
+    function dataUrlToGeminiInlineData(src) {
+        if (!src || typeof src !== 'string' || !src.startsWith('data:')) return null;
+        const comma = src.indexOf(',');
+        if (comma < 0) return null;
+        const head = src.slice(0, comma).toLowerCase();
+        if (!head.includes('base64')) return null;
+        const meta = src.slice(5, comma);
+        const mime = meta.split(';')[0].trim().toLowerCase();
+        if (!mime.startsWith('image/')) return null;
+        const data = src.slice(comma + 1).replace(/\s/g, '');
+        if (!data) return null;
+        return { mime_type: mime, data };
+    }
+
+    /** Re-encode to JPEG and cap size so the API request stays small and returns faster. */
+    async function imageElementToGeminiJpegPart(imgEl, maxDim = 768, quality = 0.72) {
+        const im = imgEl;
+        if (!im.complete) {
+            await new Promise((resolve, reject) => {
+                im.addEventListener('load', () => resolve(), { once: true });
+                im.addEventListener(
+                    'error',
+                    () => reject(new Error('Could not load image for analysis')),
+                    { once: true }
+                );
+            });
+        }
+        const w = im.naturalWidth || im.width || 0;
+        const h = im.naturalHeight || im.height || 0;
+        if (!w || !h) throw new Error('Image has no dimensions');
+
+        let tw = w;
+        let th = h;
+        if (Math.max(w, h) > maxDim) {
+            if (w >= h) {
+                tw = maxDim;
+                th = Math.max(1, Math.round((h * maxDim) / w));
+            } else {
+                th = maxDim;
+                tw = Math.max(1, Math.round((w * maxDim) / h));
+            }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = tw;
+        canvas.height = th;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas not available');
+        ctx.drawImage(im, 0, 0, tw, th);
+
+        try {
+            const parsed = dataUrlToGeminiInlineData(canvas.toDataURL('image/jpeg', quality));
+            if (parsed) return parsed;
+            const fallback = dataUrlToGeminiInlineData(canvas.toDataURL('image/jpeg', 0.85));
+            if (fallback) return fallback;
+        } catch (canvasErr) {
+            const direct = dataUrlToGeminiInlineData(im.src);
+            if (direct) return direct;
+            throw canvasErr;
+        }
+        throw new Error('Could not encode image');
+    }
+
     async function runAnalysis(parentNode) {
         const isBoard = parentNode.classList.contains('motif-board');
         const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
@@ -1554,27 +1504,12 @@ const initApp = async () => {
             return;
         }
 
-        if (!auth.currentUser) {
-            alert('Please sign in to run analysis.');
-            return;
-        }
-
-        for (const { img } of imageRecords) {
-            const u = ((img.dataset && img.dataset.downloadUrl) || img.getAttribute('src') || '').trim();
-            if (!u.startsWith('https://') || !u.includes('firebasestorage')) {
-                alert(
-                    'Every image must finish uploading to Firebase Storage before analysis. Sign in, add images again, and wait until Run Analysis highlights when ready.'
-                );
-                return;
-            }
-        }
-
         saveStateSafe();
 
         const px = parseFloat(parentNode.style.left);
         const py = parseFloat(parentNode.style.top);
         const pw = parseFloat(parentNode.style.width);
-
+        
         const card = spawnAnalysisCard(title, px + pw + 40, py);
 
         const commentLines = imageRecords.map((r) => {
@@ -1590,41 +1525,21 @@ const initApp = async () => {
             contextText = `The user's project context and goals:\n${contexts.map((c) => `- ${c}`).join('\n')}\n`;
         }
 
-        const storageUrlLines = imageRecords.map((r, i) => {
-            const u = (r.img.dataset.downloadUrl || r.img.getAttribute('src') || '').trim();
-            return `Image ${i + 1}: ${u}`;
-        });
-        const urlIndexText = `Firebase Storage download URLs for this analysis (image bytes follow in the same order):\n${storageUrlLines.join('\n')}\n`;
-
-        const imageParts = [];
-        for (const { img } of imageRecords) {
-            const url = (img.dataset.downloadUrl || img.getAttribute('src') || '').trim();
-            try {
-                const res = await fetch(url, { mode: 'cors' });
-                if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                let mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-                if (!mime.startsWith('image/')) mime = 'image/jpeg';
-                const buf = await res.arrayBuffer();
-                imageParts.push({
-                    inline_data: {
-                        mime_type: mime,
-                        data: uint8ToBase64(new Uint8Array(buf))
-                    }
-                });
-            } catch (err) {
-                console.warn('Could not fetch Storage URL for Gemini:', url, err);
-                showAnalysisError(
-                    card,
-                    'Could not download an image from its Firebase Storage URL. Confirm Storage rules allow reads for signed-in users and try again.'
-                );
-                return;
-            }
-        }
+        const prepared = await Promise.all(
+            imageRecords.map(({ img }) =>
+                imageElementToGeminiJpegPart(img).catch((err) => {
+                    console.warn('Prep image for analysis:', err);
+                    return null;
+                })
+            )
+        );
+        const imageParts = prepared.filter(Boolean).map((inline) => ({ inline_data: inline }));
 
         if (imageParts.length === 0) {
-            showAnalysisError(card, 'No images to analyze.');
+            showAnalysisError(
+                card,
+                'Could not read image pixels for the API. If images are from another site, try re-uploading files from your device.'
+            );
             return;
         }
 
@@ -1674,7 +1589,6 @@ Return the JSON object now.`;
         const requestBody = {
             contents: [{
                 parts: [
-                    { text: urlIndexText },
                     ...imageParts,
                     { text: `${analystPreamble}\n\n${jsonContract}\n\n${userTask}` }
                 ]
