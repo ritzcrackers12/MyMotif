@@ -1,4 +1,5 @@
-import { auth, db, provider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
+import { getRedirectResult } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, doc, setDoc, getDoc } from './firebase.js';
 
 const initApp = () => {
     try {
@@ -21,9 +22,11 @@ const initApp = () => {
                 landingPage.classList.add('hidden');
                 landingPage.style.display = 'none';
                 
-                userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
-                userIconBtn.title = `Logged in as ${user.displayName}`;
-                saveCloudBtn.style.display = 'block';
+                if (userIconBtn) {
+                    userIconBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile" style="width: 24px; height: 24px; border-radius: 50%;">`;
+                    userIconBtn.title = `Logged in as ${user.displayName}`;
+                }
+                if (saveCloudBtn) saveCloudBtn.style.display = 'block';
                 
                 try {
                     const docSnap = await getDoc(doc(db, "boards", user.uid));
@@ -38,8 +41,8 @@ const initApp = () => {
             } else {
                 landingPage.classList.remove('hidden');
                 landingPage.style.display = 'flex';
-                userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
-                saveCloudBtn.style.display = 'none';
+                if (userIconBtn) userIconBtn.innerHTML = `<i class="fa-solid fa-user"></i>`;
+                if (saveCloudBtn) saveCloudBtn.style.display = 'none';
             }
         });
 
