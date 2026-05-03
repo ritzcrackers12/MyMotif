@@ -990,8 +990,7 @@ const initApp = async () => {
 
     // A) API key: Google AI (Gemini) with Generative Language API enabled.
     // Uses MYMOTIF_DEFAULT_GEMINI_API_KEY unless you set a non-empty window.MYMOTIF_GEMINI_API_KEY before load.
-    // (We no longer read localStorage here — a stale MYMOTIF_GEMINI_API_KEY there was overriding this and breaking calls.)
-    // Optional: window.MYMOTIF_GEMINI_MODEL or window.MYMOTIF_GEMINI_MODEL_CHAIN = ['gemini-2.0-flash', ...]
+    // Single model only (v1): gemini-1.5-flash-latest — no fallback chain.
     //
     // GitHub Pages API key restriction (HTTP referrers) should include BOTH:
     //   https://ritzcrackers12.github.io/*
@@ -1004,24 +1003,7 @@ const initApp = async () => {
     const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
     console.log('MyMotif: Gemini key source →', winGeminiOverride ? 'window.MYMOTIF_GEMINI_API_KEY' : 'MYMOTIF_DEFAULT_GEMINI_API_KEY');
 
-    const GEMINI_MODEL_CHAIN =
-        typeof window !== 'undefined' &&
-        Array.isArray(window.MYMOTIF_GEMINI_MODEL_CHAIN) &&
-        window.MYMOTIF_GEMINI_MODEL_CHAIN.length
-            ? window.MYMOTIF_GEMINI_MODEL_CHAIN
-            : typeof window !== 'undefined' && window.MYMOTIF_GEMINI_MODEL
-              ? [window.MYMOTIF_GEMINI_MODEL]
-              : [
-                    'gemini-2.0-flash',
-                    'gemini-2.0-flash-lite',
-                    'gemini-flash-latest',
-                    'gemini-2.5-flash',
-                    'gemini-2.5-flash-lite'
-                ];
-
-    function geminiUrl(modelId) {
-        return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-    }
+    const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
     function geminiRetryMsFromMessage(message) {
         if (!message) return 0;
@@ -1060,82 +1042,76 @@ const initApp = async () => {
     }
 
     /**
-     * Calls Gemini with quota-aware retry (honors "retry in Xs") and model fallback chain.
+     * Calls Gemini v1 `gemini-1.5-flash-latest` only (no model fallback). Retries on 429 with delays.
      */
     async function geminiGenerateContent(requestBody) {
         let lastMessage = '';
-        const maxAttemptsPerModel = 3;
+        const maxAttempts = 6;
+        const minDelayBetween429RetriesMs = 12000;
 
-        for (const modelId of GEMINI_MODEL_CHAIN) {
-            const url = geminiUrl(modelId);
-            for (let attempt = 0; attempt < maxAttemptsPerModel; attempt++) {
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
-                let response;
-                try {
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody),
-                        signal: controller.signal
-                    });
-                } catch (e) {
-                    clearTimeout(timer);
-                    if (e && e.name === 'AbortError') {
-                        lastMessage = `Request timed out after ${Math.round(GEMINI_FETCH_TIMEOUT_MS / 1000)}s (network or very large images). Try fewer images or a faster connection.`;
-                    } else {
-                        lastMessage = e && e.message ? String(e.message) : 'Network error calling Gemini.';
-                    }
-                    break;
-                }
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+            let response;
+            try {
+                response = await fetch(GEMINI_GENERATE_CONTENT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal
+                });
+            } catch (e) {
                 clearTimeout(timer);
-
-                const data = await response.json().catch(() => ({}));
-
-                if (data.promptFeedback?.blockReason) {
-                    lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
-                    break;
+                if (e && e.name === 'AbortError') {
+                    lastMessage = `Request timed out after ${Math.round(GEMINI_FETCH_TIMEOUT_MS / 1000)}s (network or very large images). Try fewer images or a faster connection.`;
+                } else {
+                    lastMessage = e && e.message ? String(e.message) : 'Network error calling Gemini.';
                 }
-
-                const c0 = data.candidates?.[0];
-                if (response.ok && c0) {
-                    if (!geminiCandidateHasText(data)) {
-                        const fr = c0.finishReason || c0.finish_reason;
-                        lastMessage = fr
-                            ? `Model returned no text (finish: ${fr}). Try different images or a smaller set.`
-                            : 'Model returned no text in the response.';
-                        break;
-                    }
-                    return data;
-                }
-
-                lastMessage = data.error?.message || `HTTP ${response.status}`;
-
-                const is429 =
-                    response.status === 429 ||
-                    data.error?.status === 'RESOURCE_EXHAUSTED' ||
-                    /quota|exceeded|Resource exhausted|Too Many Requests/i.test(lastMessage);
-                if (is429 && attempt < maxAttemptsPerModel - 1) {
-                    let waitMs = geminiRetryMsFromResponse(response, lastMessage);
-                    if (waitMs < 4000) waitMs = 6000;
-                    await geminiSleep(waitMs);
-                    continue;
-                }
-
-                if (response.status === 403 || response.status === 404) {
-                    break;
-                }
-
                 break;
             }
+            clearTimeout(timer);
+
+            const data = await response.json().catch(() => ({}));
+
+            if (data.promptFeedback?.blockReason) {
+                lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
+                break;
+            }
+
+            const c0 = data.candidates?.[0];
+            if (response.ok && c0) {
+                if (!geminiCandidateHasText(data)) {
+                    const fr = c0.finishReason || c0.finish_reason;
+                    lastMessage = fr
+                        ? `Model returned no text (finish: ${fr}). Try different images or a smaller set.`
+                        : 'Model returned no text in the response.';
+                    break;
+                }
+                return data;
+            }
+
+            lastMessage = data.error?.message || `HTTP ${response.status}`;
+
+            const is429 =
+                response.status === 429 ||
+                data.error?.status === 'RESOURCE_EXHAUSTED' ||
+                /quota|exceeded|Resource exhausted|Too Many Requests/i.test(lastMessage);
+            if (is429 && attempt < maxAttempts - 1) {
+                let waitMs = geminiRetryMsFromResponse(response, lastMessage);
+                if (waitMs < minDelayBetween429RetriesMs) waitMs = minDelayBetween429RetriesMs;
+                await geminiSleep(waitMs);
+                continue;
+            }
+
+            break;
         }
         const hint429 =
             /429|quota|Resource exhausted|Too Many Requests/i.test(lastMessage)
-                ? ' (429 = rate limit or free-tier quota: wait a few minutes, enable billing in Google AI Studio, or use Run Analysis less often.)'
+                ? ' (429 = rate limit: waits were applied between retries; try again later or enable billing in Google AI Studio.)'
                 : '';
         throw new Error(
             (lastMessage ||
-                'Gemini: all models in the fallback list failed. Check https://aistudio.google.com/ for quotas and enabled models.') + hint429
+                'Gemini request failed (v1 models/gemini-1.5-flash-latest). Check https://aistudio.google.com/ for API access and quotas.') + hint429
         );
     }
 
