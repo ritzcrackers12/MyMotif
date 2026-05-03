@@ -17,6 +17,47 @@ const initApp = () => {
             throw new Error("Missing board DOM (#board-container, #canvas, or #landing-page).");
         }
 
+        let cloudSaveTimer = null;
+
+        async function persistBoardToCloud({ silent = false } = {}) {
+            if (!auth.currentUser) return;
+            document.querySelectorAll("#canvas input").forEach((inp) => inp.setAttribute("value", inp.value));
+            let ghostHtml = "";
+            const ghost = document.getElementById("ghost-frame");
+            if (ghost && ghost.parentNode === canvas) {
+                canvas.removeChild(ghost);
+                ghostHtml = ghost.outerHTML;
+            }
+            try {
+                await setDoc(
+                    doc(db, "boards", auth.currentUser.uid),
+                    {
+                        canvasHTML: canvas.innerHTML,
+                        updatedAt: new Date()
+                    },
+                    { merge: true }
+                );
+            } finally {
+                if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
+            }
+        }
+
+        function scheduleCloudSave() {
+            if (!auth.currentUser) return;
+            if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+            cloudSaveTimer = setTimeout(() => {
+                cloudSaveTimer = null;
+                persistBoardToCloud({ silent: true }).catch((err) => console.warn("Auto-save:", err));
+            }, 2800);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden" && auth.currentUser) {
+                if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+                persistBoardToCloud({ silent: true }).catch(() => {});
+            }
+        });
+
         // --- AUTH STATE OBSERVER (single listener) ---
         onAuthStateChanged(auth, async (user) => {
             console.log("Auth State Changed:", user ? "Logged In" : "Logged Out");
@@ -31,16 +72,34 @@ const initApp = () => {
                 if (saveCloudBtn) saveCloudBtn.style.display = 'block';
                 
                 try {
+                    await setDoc(
+                        doc(db, "boards", user.uid),
+                        {
+                            userProfile: {
+                                displayName: user.displayName || null,
+                                email: user.email || null,
+                                photoURL: user.photoURL || null,
+                                lastLoginAt: new Date().toISOString()
+                            },
+                            updatedAt: new Date()
+                        },
+                        { merge: true }
+                    );
+
                     const docSnap = await getDoc(doc(db, "boards", user.uid));
-                    if (docSnap.exists() && docSnap.data().canvasHTML) {
-                        const temp = document.createElement('div');
-                        temp.innerHTML = docSnap.data().canvasHTML;
-                        const ghost = document.getElementById('ghost-frame');
+                    const snapExists =
+                        typeof docSnap.exists === "function" ? docSnap.exists() : docSnap.exists;
+                    const data = docSnap.data();
+                    if (snapExists && data && data.canvasHTML) {
+                        const temp = document.createElement("div");
+                        temp.innerHTML = data.canvasHTML;
+                        const ghost = document.getElementById("ghost-frame");
                         if (ghost) temp.prepend(ghost);
                         canvas.innerHTML = temp.innerHTML;
-                        document.querySelectorAll('#canvas input').forEach((inp) => {
-                            if (inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
+                        document.querySelectorAll("#canvas input").forEach((inp) => {
+                            if (inp.hasAttribute("value")) inp.value = inp.getAttribute("value");
                         });
+                        rehydrateAnalysisCardsFromDom();
                     }
                 } catch (e) {
                     console.error("Load Error:", e);
@@ -97,12 +156,16 @@ const initApp = () => {
         if (signupBtn) signupBtn.addEventListener('click', doGoogleSignIn);
         if (loginBtn) loginBtn.addEventListener('click', doGoogleSignIn);
         if (userIconBtn) {
-            userIconBtn.addEventListener('click', (e) => {
+            userIconBtn.addEventListener('click', async (e) => {
                 if (auth.currentUser) {
-                    if(confirm("Sign out?")) {
-                        signOut(auth);
-                        location.reload();
+                    if (!confirm("Sign out? Your board will be saved to the cloud first.")) return;
+                    try {
+                        await persistBoardToCloud({ silent: true });
+                    } catch (err) {
+                        console.warn("Save before sign-out:", err);
                     }
+                    await signOut(auth);
+                    location.reload();
                 } else {
                     doGoogleSignIn(e);
                 }
@@ -193,6 +256,7 @@ const initApp = () => {
         if (historyStack.length > 30) historyStack.shift();
         
         if (ghost) canvas.prepend(ghost);
+        scheduleCloudSave();
     }
 
     function undoSafe() {
@@ -205,6 +269,7 @@ const initApp = () => {
             if (ghost) canvas.prepend(ghost);
             deselectAll();
         }
+        scheduleCloudSave();
     }
 
 
@@ -575,6 +640,7 @@ const initApp = () => {
         `;
         canvas.appendChild(board);
         selectElement(board, 'board');
+        scheduleCloudSave();
     }
 
     function createFrameAt(x, y, w, h) {
@@ -607,6 +673,7 @@ const initApp = () => {
 
         canvas.appendChild(frame);
         selectElement(frame, 'frame');
+        scheduleCloudSave();
     }
 
     function selectElement(el, type) {
@@ -744,6 +811,7 @@ const initApp = () => {
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
                     runBtn.classList.add('ready');
+                    scheduleCloudSave();
                 } catch(error) {
                     console.error("Image processing failed:", error);
                     imgNode.remove();
@@ -783,6 +851,139 @@ const initApp = () => {
         (typeof window !== 'undefined' && window.MYMOTIF_GEMINI_API_KEY) ||
         'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    async function callGeminiFollowUp(insights, messages) {
+        const ctx = JSON.stringify(insights);
+        const ctxTrim = ctx.length > 14000 ? ctx.slice(0, 14000) + "\n…(truncated)" : ctx;
+        const historyContents = [];
+        for (const m of messages) {
+            const role = m.role === "user" ? "user" : "model";
+            historyContents.push({ role, parts: [{ text: m.text }] });
+        }
+        const body = {
+            systemInstruction: {
+                parts: [
+                    {
+                        text:
+                            `You are the same expert visual design analyst who produced the structured analysis. The user has that analysis on screen. Answer follow-ups clearly and concisely (short paragraphs or tight bullets). Ground answers in the JSON below; if you cannot know something from the analysis, say so.\n\nAnalysis JSON:\n${ctxTrim}`
+                    }
+                ]
+            },
+            contents: historyContents,
+            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
+        };
+        const res = await fetch(GEMINI_API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error?.message || `API ${res.status}`);
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const out = String(text).trim();
+        return out || "(No reply text returned.)";
+    }
+
+    function bindFollowUpPanel(card) {
+        const wrap = card.querySelector(".followup-chat");
+        if (!wrap || !card._myMotifInsights) return;
+        const thread = wrap.querySelector("[data-followup-thread]");
+        const input = wrap.querySelector("[data-followup-input]");
+        const sendBtn = wrap.querySelector("[data-followup-send]");
+        if (!thread || !input || !sendBtn) return;
+
+        function appendBubble(role, text) {
+            const div = document.createElement("div");
+            div.className = "followup-msg followup-msg-" + role;
+            div.textContent = text;
+            thread.appendChild(div);
+            thread.scrollTop = thread.scrollHeight;
+        }
+
+        async function sendFollowUp() {
+            const text = input.value.trim();
+            if (!text) return;
+            input.value = "";
+            appendBubble("user", text);
+            card._myMotifFollowUp.push({ role: "user", text });
+
+            const loading = document.createElement("div");
+            loading.className = "followup-msg followup-msg-model followup-loading";
+            loading.textContent = "Thinking…";
+            thread.appendChild(loading);
+            thread.scrollTop = thread.scrollHeight;
+
+            try {
+                const reply = await callGeminiFollowUp(card._myMotifInsights, card._myMotifFollowUp);
+                loading.remove();
+                appendBubble("model", reply);
+                card._myMotifFollowUp.push({ role: "model", text: reply });
+                scheduleCloudSave();
+            } catch (err) {
+                loading.remove();
+                const msg = err.message || String(err);
+                appendBubble("model", "Sorry — " + msg);
+                card._myMotifFollowUp.push({ role: "model", text: msg });
+            }
+        }
+
+        sendBtn.onclick = (e) => {
+            e.preventDefault();
+            sendFollowUp();
+        };
+        input.onkeydown = (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendFollowUp();
+            }
+        };
+        if (!wrap.dataset.followupBound) {
+            wrap.addEventListener("mousedown", (e) => e.stopPropagation());
+            wrap.dataset.followupBound = "1";
+        }
+    }
+
+    function mountFollowUpChat(card, insights) {
+        const resultsDiv = card.querySelector(".analysis-results");
+        if (!resultsDiv) return;
+        resultsDiv.querySelector(".followup-chat")?.remove();
+
+        card._myMotifInsights = insights;
+        card._myMotifFollowUp = [];
+
+        const wrap = document.createElement("div");
+        wrap.className = "followup-chat";
+        wrap.innerHTML = `
+            <div class="followup-header"><i class="fa-solid fa-message"></i> Follow-up</div>
+            <div class="followup-thread" data-followup-thread></div>
+            <div class="followup-input-row">
+                <textarea rows="2" class="followup-textarea" placeholder="Ask a follow-up… Enter sends · Shift+Enter newline" data-followup-input></textarea>
+                <button type="button" class="followup-send" data-followup-send title="Send"><i class="fa-solid fa-arrow-up"></i></button>
+            </div>`;
+        resultsDiv.appendChild(wrap);
+        bindFollowUpPanel(card);
+    }
+
+    function rehydrateAnalysisCardsFromDom() {
+        canvas.querySelectorAll(".analysis-card").forEach((card) => {
+            const store = card.querySelector(".analysis-payload-store");
+            if (!store || !store.textContent.trim()) return;
+            let insights;
+            try {
+                insights = JSON.parse(store.textContent);
+            } catch (e) {
+                return;
+            }
+            card._myMotifInsights = insights;
+            card._myMotifFollowUp = [];
+            card.querySelectorAll(".followup-thread .followup-msg").forEach((el) => {
+                if (el.classList.contains("followup-loading")) return;
+                const role = el.classList.contains("followup-msg-user") ? "user" : "model";
+                card._myMotifFollowUp.push({ role, text: el.textContent });
+            });
+            bindFollowUpPanel(card);
+        });
+    }
 
     // --- INLINE IMAGE COMMENT (bubble editor → Enter → small chip, stays on this node for Gemini) ---
     let activeCommentEditor = null;
@@ -1121,6 +1322,7 @@ Return the JSON object now.`;
             const rawText = candidate.content?.parts?.[0]?.text || '';
             const insights = parseGeminiJson(rawText);
             renderAnalysisResults(card, insights);
+            scheduleCloudSave();
         } catch (error) {
             console.error("Gemini API Error:", error);
             showAnalysisError(card, error.message || String(error));
@@ -1138,7 +1340,7 @@ Return the JSON object now.`;
 
         card.innerHTML = `
             <div class="card-header">
-                <h2>Analysis: ${title}</h2>
+                <h2>Analysis: ${escapeHtml(title)}</h2>
                 <button class="delete-btn"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="individual-drag-handle" title="Move Individually"></div>
@@ -1207,6 +1409,7 @@ Return the JSON object now.`;
         const doNotHtml = doNot.length ? `<ul>${doNot.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : '<p class="muted">—</p>';
 
         resultsDiv.innerHTML = `
+            <div class="analysis-results-main">
             <div class="analysis-section">
                 <h3><i class="fa-solid fa-dna" style="margin-right:6px; color:var(--accent);"></i>Visual DNA</h3>
                 <p>${escapeHtml(insights.visual_dna) || '—'}</p>
@@ -1252,10 +1455,23 @@ Return the JSON object now.`;
                 <h3><i class="fa-solid fa-earth-americas" style="margin-right:6px; color:var(--accent);"></i>Cultural geography</h3>
                 <p>${escapeHtml(insights.cultural_geography) || '—'}</p>
             </div>
+            </div>
         `;
+
+        const mainEl = resultsDiv.querySelector(".analysis-results-main");
+        if (mainEl) {
+            mainEl.querySelector(".analysis-payload-store")?.remove();
+            const store = document.createElement("textarea");
+            store.className = "analysis-payload-store";
+            store.setAttribute("aria-hidden", "true");
+            store.hidden = true;
+            store.textContent = JSON.stringify(insights);
+            mainEl.appendChild(store);
+        }
 
         loader.classList.add('hidden');
         resultsDiv.classList.remove('hidden');
+        mountFollowUpChat(card, insights);
     }
 
     function showAnalysisError(card, message) {
@@ -1276,33 +1492,21 @@ Return the JSON object now.`;
     }
 
     if (saveCloudBtn) {
-        saveCloudBtn.addEventListener('click', async () => {
+        saveCloudBtn.addEventListener("click", async () => {
             if (!auth.currentUser) return;
             saveCloudBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            
             try {
-                document.querySelectorAll('#canvas input').forEach(inp => inp.setAttribute('value', inp.value));
-                
-                let ghostHtml = '';
-                const ghost = document.getElementById('ghost-frame');
-                if (ghost && ghost.parentNode === canvas) {
-                    canvas.removeChild(ghost);
-                    ghostHtml = ghost.outerHTML;
-                }
-                
-                await setDoc(doc(db, "boards", auth.currentUser.uid), {
-                    canvasHTML: canvas.innerHTML,
-                    updatedAt: new Date()
-                });
-                
-                if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
-                
+                await persistBoardToCloud({ silent: false });
                 saveCloudBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #10B981;"></i>';
-                setTimeout(() => { saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>'; }, 2000);
-            } catch(error) {
+                setTimeout(() => {
+                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
+                }, 2000);
+            } catch (error) {
                 console.error("Error saving to cloud:", error);
                 saveCloudBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: #EF4444;"></i>';
-                setTimeout(() => { saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>'; }, 2000);
+                setTimeout(() => {
+                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
+                }, 2000);
                 alert("Failed to save board. Are Firestore rules open?");
             }
         });
