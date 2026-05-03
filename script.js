@@ -405,8 +405,15 @@ const initApp = () => {
                     item.el.style.top = (item.top + dy) + 'px';
                 });
             } else if (dragType === 'resize') {
-                draggingElement.style.width = Math.max(50, initialWidth + dx) + 'px';
-                draggingElement.style.height = Math.max(50, initialHeight + dy) + 'px';
+                if (draggingElement.classList.contains('motif-image-node')) {
+                    const ratio = initialWidth / initialHeight;
+                    const newWidth = Math.max(50, initialWidth + dx);
+                    draggingElement.style.width = newWidth + 'px';
+                    draggingElement.style.height = (newWidth / ratio) + 'px';
+                } else {
+                    draggingElement.style.width = Math.max(50, initialWidth + dx) + 'px';
+                    draggingElement.style.height = Math.max(50, initialHeight + dy) + 'px';
+                }
             }
         }
     });
@@ -564,7 +571,10 @@ const initApp = () => {
                 const ctx = tempCanvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, width, height);
                 // Compress to 70% quality JPEG to save massive space
-                resolve(tempCanvas.toDataURL('image/jpeg', 0.7));
+                resolve({ 
+                    url: tempCanvas.toDataURL('image/jpeg', 0.7),
+                    aspectRatio: width / height
+                });
             };
             img.src = dataUrl;
         });
@@ -607,10 +617,25 @@ const initApp = () => {
                 
                 try {
                     // Compress the image locally to avoid hitting Firestore 1MB limits
-                    const compressedUrl = await compressImage(e.target.result);
+                    const result = await compressImage(e.target.result);
+                    const compressedUrl = result.url;
+                    const aspectRatio = result.aspectRatio;
+                    
+                    const fw = activeFrameForUpload.offsetWidth;
+                    const fh = activeFrameForUpload.offsetHeight;
+                    const baseSize = Math.min(fw, fh) * 0.4; 
+                    
+                    // Adjust node size to match real aspect ratio
+                    if (aspectRatio > 1) {
+                        imgNode.style.width = baseSize + 'px';
+                        imgNode.style.height = (baseSize / aspectRatio) + 'px';
+                    } else {
+                        imgNode.style.height = baseSize + 'px';
+                        imgNode.style.width = (baseSize * aspectRatio) + 'px';
+                    }
                     
                     imgNode.innerHTML = `
-                        <img src="${compressedUrl}">
+                        <img src="${compressedUrl}" style="object-fit: cover; width: 100%; height: 100%; pointer-events: none;">
                         <div class="image-resize-handle"></div>
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
