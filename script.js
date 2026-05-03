@@ -1,4 +1,5 @@
-import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
+import { auth, db, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
+
 
 const initApp = () => {
     const boardContainer = document.getElementById('board-container');
