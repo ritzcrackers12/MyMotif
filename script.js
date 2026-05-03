@@ -807,7 +807,7 @@ const initApp = () => {
                 await signInWithRedirect(auth, provider);
             } catch (error) {
                 console.error("Error signing in with Google: ", error);
-                alert("Failed to sign in. Please try again.");
+                alert(`Firebase Auth Error!\nCode: ${error.code}\nMessage: ${error.message}\n\nPlease send this error back!`);
                 btn.innerHTML = '<i class="fa-brands fa-google"></i> Sign Up with Google';
             }
         });
