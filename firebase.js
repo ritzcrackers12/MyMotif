@@ -2,7 +2,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
-import { getStorage, ref, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-storage.js";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -19,7 +18,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 const provider = new GoogleAuthProvider();
 
-export { auth, db, storage, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc, ref, uploadString, getDownloadURL };
+export { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, doc, setDoc, getDoc };

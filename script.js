@@ -1,4 +1,4 @@
-import { auth, db, storage, provider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, doc, setDoc, getDoc, ref, uploadString, getDownloadURL } from './firebase.js';
+import { auth, db, provider, signInWithPopup, onAuthStateChanged, signOut, doc, setDoc, getDoc } from './firebase.js';
 
 const initApp = () => {
     const boardContainer = document.getElementById('board-container');
@@ -546,6 +546,30 @@ const initApp = () => {
         globalFileInput.value = '';
     });
 
+    async function compressImage(dataUrl, maxWidth = 1000) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const tempCanvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+                
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width);
+                    width = maxWidth;
+                }
+                
+                tempCanvas.width = width;
+                tempCanvas.height = height;
+                const ctx = tempCanvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                // Compress to 70% quality JPEG to save massive space
+                resolve(tempCanvas.toDataURL('image/jpeg', 0.7));
+            };
+            img.src = dataUrl;
+        });
+    }
+
     function handleFiles(files) {
         if (!activeFrameForUpload) return;
         
@@ -582,24 +606,19 @@ const initApp = () => {
                 frameBody.appendChild(imgNode);
                 
                 try {
-                    let srcUrl = e.target.result;
-                    if (auth.currentUser) {
-                        // Upload to Firebase Storage
-                        const imageRef = ref(storage, `images/${auth.currentUser.uid}/${Date.now()}_${Math.floor(Math.random()*1000)}`);
-                        await uploadString(imageRef, e.target.result, 'data_url');
-                        srcUrl = await getDownloadURL(imageRef);
-                    }
+                    // Compress the image locally to avoid hitting Firestore 1MB limits
+                    const compressedUrl = await compressImage(e.target.result);
                     
                     imgNode.innerHTML = `
-                        <img src="${srcUrl}">
+                        <img src="${compressedUrl}">
                         <div class="image-resize-handle"></div>
                         <div class="individual-drag-handle" title="Move Individually"></div>
                     `;
                     runBtn.classList.add('ready');
                 } catch(error) {
-                    console.error("Image upload failed:", error);
+                    console.error("Image processing failed:", error);
                     imgNode.remove();
-                    alert("Failed to upload image. Are Firebase Storage Rules open?");
+                    alert("Failed to process image.");
                 }
             };
             reader.readAsDataURL(file);
