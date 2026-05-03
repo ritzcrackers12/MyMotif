@@ -1014,9 +1014,9 @@ const initApp = async () => {
               : [
                     'gemini-2.0-flash',
                     'gemini-2.0-flash-lite',
+                    'gemini-flash-latest',
                     'gemini-2.5-flash',
-                    'gemini-2.5-flash-lite',
-                    'gemini-1.5-flash'
+                    'gemini-2.5-flash-lite'
                 ];
 
     function geminiUrl(modelId) {
@@ -1030,6 +1030,21 @@ const initApp = async () => {
         const sec = parseFloat(m[1]);
         if (!Number.isFinite(sec) || sec < 0) return 0;
         return Math.min(Math.ceil(sec * 1000), 45000);
+    }
+
+    function geminiRetryMsFromResponse(response, message) {
+        try {
+            const h = response && response.headers && response.headers.get('Retry-After');
+            if (h) {
+                const sec = parseFloat(h);
+                if (Number.isFinite(sec) && sec > 0) {
+                    return Math.min(Math.ceil(sec * 1000), 120000);
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return geminiRetryMsFromMessage(message);
     }
 
     function geminiSleep(ms) {
@@ -1049,9 +1064,11 @@ const initApp = async () => {
      */
     async function geminiGenerateContent(requestBody) {
         let lastMessage = '';
+        const maxAttemptsPerModel = 3;
+
         for (const modelId of GEMINI_MODEL_CHAIN) {
             const url = geminiUrl(modelId);
-            for (let attempt = 0; attempt < 2; attempt++) {
+            for (let attempt = 0; attempt < maxAttemptsPerModel; attempt++) {
                 const controller = new AbortController();
                 const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
                 let response;
@@ -1093,21 +1110,32 @@ const initApp = async () => {
                 }
 
                 lastMessage = data.error?.message || `HTTP ${response.status}`;
-                const exhausted =
+
+                const is429 =
                     response.status === 429 ||
                     data.error?.status === 'RESOURCE_EXHAUSTED' ||
-                    /quota|exceeded|Resource exhausted/i.test(lastMessage);
-                if (exhausted && attempt === 0) {
-                    const waitMs = geminiRetryMsFromMessage(lastMessage);
-                    if (waitMs > 0) await geminiSleep(waitMs);
+                    /quota|exceeded|Resource exhausted|Too Many Requests/i.test(lastMessage);
+                if (is429 && attempt < maxAttemptsPerModel - 1) {
+                    let waitMs = geminiRetryMsFromResponse(response, lastMessage);
+                    if (waitMs < 4000) waitMs = 6000;
+                    await geminiSleep(waitMs);
                     continue;
                 }
+
+                if (response.status === 403 || response.status === 404) {
+                    break;
+                }
+
                 break;
             }
         }
+        const hint429 =
+            /429|quota|Resource exhausted|Too Many Requests/i.test(lastMessage)
+                ? ' (429 = rate limit or free-tier quota: wait a few minutes, enable billing in Google AI Studio, or use Run Analysis less often.)'
+                : '';
         throw new Error(
-            lastMessage ||
-                'Gemini: all models in the fallback list failed. Enable billing / check quotas in Google AI Studio: https://aistudio.google.com/'
+            (lastMessage ||
+                'Gemini: all models in the fallback list failed. Check https://aistudio.google.com/ for quotas and enabled models.') + hint429
         );
     }
 
