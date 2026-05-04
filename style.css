@@ -1671,6 +1671,28 @@ a.secondary-btn:hover {
     min-height: 2.8em;
     color: rgba(255, 255, 255, 0.8);
 }
+.vibe-loading-doodle-wrap {
+    width: 100%;
+    max-width: 360px;
+    margin-top: 4px;
+}
+.vibe-loading-doodle-hint {
+    margin: 0 0 8px 0;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    color: rgba(255, 255, 255, 0.45);
+}
+.vibe-loading-canvas {
+    display: block;
+    width: 100%;
+    height: 132px;
+    border-radius: 10px;
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    background: rgba(0, 0, 0, 0.35);
+    cursor: crosshair;
+    touch-action: none;
+}
 .vibe-emotion-label {
     font-family: 'Space Grotesk', sans-serif;
     font-size: 12px;

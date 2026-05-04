@@ -1621,6 +1621,140 @@ Avoid repeating: "${avoidName}"`;
             return `${m}:${String(s).padStart(2, '0')}`;
         }
 
+        /** Green slime doodle under the loading timer; delayed stroke = snake trail. Returns cleanup. */
+        function attachVibeLoadingSlimeDoodle() {
+            const canvas = document.getElementById('vibe-loading-canvas');
+            if (!canvas || !canvas.getContext) return () => {};
+            const ctx = canvas.getContext('2d');
+            const SLIME_GREEN = '#22c55e';
+            const TRAIL_LAG_MS = 115;
+            const MAX_POINTS_PER_STROKE = 600;
+            let logicalW = 320;
+            let logicalH = 132;
+            const strokes = [];
+            let drawing = false;
+            let rafId = 0;
+            let ro = null;
+
+            function resize() {
+                const wrap = canvas.closest('.vibe-loading-doodle-wrap');
+                const w = wrap ? Math.floor(wrap.getBoundingClientRect().width) : 320;
+                logicalW = Math.max(240, w);
+                logicalH = 132;
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                canvas.style.width = `${logicalW}px`;
+                canvas.style.height = `${logicalH}px`;
+                canvas.width = Math.floor(logicalW * dpr);
+                canvas.height = Math.floor(logicalH * dpr);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+
+            function clamp(p) {
+                return {
+                    x: Math.max(0, Math.min(logicalW, p.x)),
+                    y: Math.max(0, Math.min(logicalH, p.y))
+                };
+            }
+
+            function localPos(e) {
+                const rect = canvas.getBoundingClientRect();
+                const cx = e.clientX;
+                const cy = e.clientY;
+                return clamp({
+                    x: cx - rect.left,
+                    y: cy - rect.top
+                });
+            }
+
+            function paint() {
+                const now = performance.now();
+                ctx.clearRect(0, 0, logicalW, logicalH);
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = SLIME_GREEN;
+                ctx.fillStyle = SLIME_GREEN;
+                ctx.lineWidth = 3;
+                ctx.shadowColor = 'rgba(34, 197, 94, 0.45)';
+                ctx.shadowBlur = 6;
+
+                for (const stroke of strokes) {
+                    const delayed = stroke.filter((p) => p.t <= now - TRAIL_LAG_MS);
+                    if (delayed.length >= 2) {
+                        ctx.beginPath();
+                        ctx.moveTo(delayed[0].x, delayed[0].y);
+                        for (let i = 1; i < delayed.length; i++) {
+                            ctx.lineTo(delayed[i].x, delayed[i].y);
+                        }
+                        ctx.stroke();
+                    } else if (delayed.length === 1) {
+                        ctx.beginPath();
+                        ctx.arc(delayed[0].x, delayed[0].y, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                ctx.shadowBlur = 0;
+                rafId = requestAnimationFrame(paint);
+            }
+
+            function addPoint(e) {
+                if (!drawing || strokes.length === 0) return;
+                const p = localPos(e);
+                const cur = strokes[strokes.length - 1];
+                cur.push({ x: p.x, y: p.y, t: performance.now() });
+                if (cur.length > MAX_POINTS_PER_STROKE) cur.splice(0, cur.length - MAX_POINTS_PER_STROKE);
+            }
+
+            function onDown(e) {
+                if (e.button !== undefined && e.button !== 0) return;
+                drawing = true;
+                strokes.push([]);
+                addPoint(e);
+                try {
+                    canvas.setPointerCapture(e.pointerId);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+
+            function onMove(e) {
+                if (!drawing) return;
+                addPoint(e);
+            }
+
+            function onUp(e) {
+                drawing = false;
+                try {
+                    canvas.releasePointerCapture(e.pointerId);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+
+            resize();
+            rafId = requestAnimationFrame(paint);
+            window.addEventListener('resize', resize);
+            if (typeof ResizeObserver !== 'undefined') {
+                ro = new ResizeObserver(() => resize());
+                const wrap = canvas.closest('.vibe-loading-doodle-wrap');
+                if (wrap) ro.observe(wrap);
+            }
+
+            canvas.addEventListener('pointerdown', onDown);
+            canvas.addEventListener('pointermove', onMove);
+            canvas.addEventListener('pointerup', onUp);
+            canvas.addEventListener('pointercancel', onUp);
+
+            return () => {
+                cancelAnimationFrame(rafId);
+                window.removeEventListener('resize', resize);
+                if (ro) ro.disconnect();
+                canvas.removeEventListener('pointerdown', onDown);
+                canvas.removeEventListener('pointermove', onMove);
+                canvas.removeEventListener('pointerup', onUp);
+                canvas.removeEventListener('pointercancel', onUp);
+            };
+        }
+
         async function startFindMyVibe(frameEl) {
             const ta = frameEl.querySelector('.journal-entry-textarea');
             const entry = (ta && ta.value.trim()) || '';
@@ -1646,7 +1780,12 @@ Avoid repeating: "${avoidName}"`;
                 <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
                 <p class="vibe-loading-countdown" id="vibe-countdown-display">${formatVibeLoadingCountdown(secondsLeft)}</p>
                 <p class="vibe-loading-status" id="vibe-loading-status" aria-live="polite"></p>
+                <div class="vibe-loading-doodle-wrap">
+                    <p class="vibe-loading-doodle-hint">hold &amp; drag — slime green trail</p>
+                    <canvas class="vibe-loading-canvas" id="vibe-loading-canvas" width="320" height="132" role="img" aria-label="Doodle while you wait"></canvas>
+                </div>
             </div>`);
+            const disposeLoadingDoodle = attachVibeLoadingSlimeDoodle();
             let countdownIntervalId = null;
             const tick = () => {
                 const cd = document.getElementById('vibe-countdown-display');
@@ -1699,6 +1838,7 @@ Avoid repeating: "${avoidName}"`;
                 document.getElementById('vibe-retry').addEventListener('click', () => startFindMyVibe(frameEl));
             } finally {
                 if (countdownIntervalId) clearInterval(countdownIntervalId);
+                if (typeof disposeLoadingDoodle === 'function') disposeLoadingDoodle();
             }
         }
 
