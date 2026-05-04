@@ -636,23 +636,28 @@ const initApp = async () => {
             const userPrompt = `You are doing CLOSE READING of this journal entry, not summarizing it.
 Your job is to find SPECIFIC DETAILS and match them to SPECIFIC moments in art and music — not general vibes.
 
-Rules for analysis:
-- Pull out literal words and phrases from the entry.
-- Find songs where the rapper uses similar specific language or imagery; say which lyric or moment matches.
-- If the entry mentions hunger, find a song about literal or metaphorical hunger — name the moment.
-- If the entry mentions a good mood, find the song that captures that exact quality of lightness, not just "happy rap."
-- Never boil the entry down to one word like "ambition" — name 2–3 specific details from the entry and explain how each maps to the recommendation.
-- The reason fields should quote SPECIFIC words or phrases from the journal entry, then connect them to the recommended work.
-- For art: capture the TEXTURE of the feeling. Example of BAD reason: "This matches the ambition in your entry." Example of GOOD reason: "Your line about being hungry both internally and externally maps directly to how [song] rides a restless, reaching energy — [artist] is literally rapping about wanting more of everything while sounding like he's in a great mood doing it."
+SONG (mandatory — never artist-only)
+- You MUST name one **specific track** (exact song title) from an artist in the curator universe. Do not recommend only an artist name.
+- Choose the song whose **story arc or lyrics** overlap the journal: e.g. if they wrote about a date, prefer a track where the rapper tells a date story or parallel narrative; quote or paraphrase how the song’s plot matches theirs.
+- Before you lock the pick, use **forum-grade context**: Genius (lyrics + annotations/song bio) and Reddit/fan discussions are your conceptual references for what the track is *about* — weave that into your reason (you can mention Genius or Reddit as sources where people unpack the narrative).
 
-Do not ask generic questions in your prose — reference specific words from the journal in your reasons and search trails as if follow-ups were micro-specific ("If they said 'hungry', tie recommendations to that hunger.").
+Rules for analysis:
+- Pull out literal words and phrases from the entry (shower, date, excited, etc.).
+- Find that specific song where bar-level meaning aligns; say which lyric or verse theme matches a journal beat.
+- Never boil the entry down to one abstract summary word for **searchTrails** — each of the three trails must combine concrete journal hooks with discovery intent (see OUTPUT CONTRACT).
+
+SEARCH TRAILS (critical)
+- Do **not** output trails that restate the whole entry as one emotion word ("hope", "stress").
+- Build trails from **small details**: objects, actions, order of events, sensory bits — mixed with artist/song or art angles. Example entry: "woke up, shower, date I was excited about" → one trail might blend shower + visual art discovery; another blends date + your chosen artist/song + genius lyrics; another might use "excited" **plus** a concrete phrase from the entry, never alone.
+
+The reason fields should quote SPECIFIC words or phrases from the journal entry, then connect them to the recommended **song’s** story (with Genius/Reddit-quality specificity).
 
 Return ONLY this JSON, nothing else:
 {
   "primaryEmotion": string,
   "artist": {
     "name": string,
-    "song": string | null,
+    "song": string,
     "albumCover": string | null,
     "reason": string,
     "searchUrl": string
@@ -691,6 +696,10 @@ ${entryText}
             if (!parsed.artist?.name || !parsed.art1?.name || !parsed.art2?.name) {
                 throw new Error('Model response missing artist, art1, or art2. Try again.');
             }
+            const songTitle = String(parsed.artist?.song || '').trim();
+            if (!songTitle) {
+                throw new Error('Model returned no specific song title. Try again.');
+            }
             return parsed;
         }
 
@@ -709,6 +718,7 @@ ${entryText}
                       : 'art2 (must stay a different category than art1 after replacement)';
             const currentJson = JSON.stringify(vibeState.rec);
             const userPrompt = `CLOSE READING / micro-detail rules apply as in the main vibe task. Give a completely different ${slotLabel} recommendation. Do not repeat this title/name: "${avoidName}".
+If replacing artist: you MUST output another **specific song title** (not artist-only); use Genius/Reddit-level understanding of the track’s story vs. the journal.
 
 Journal entry: ${entryText}
 Emotion: ${emotion}
