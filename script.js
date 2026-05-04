@@ -26,7 +26,8 @@ import {
     buildVibeStep1OutputContract,
     buildVibeStep2OutputContract,
     buildVibeReshuffleMusicContract,
-    buildVibeReshuffleArtContract
+    buildVibeReshuffleArtContract,
+    buildVibeReshuffleStyleContract
 } from './curator-prompt.js';
 
 /** Prefer model watch/results URL; else YouTube search for artist + song. */
@@ -222,7 +223,13 @@ function normalizeRecommendationUrls(rec) {
         rec.artist.songSoundcloudUrl = `https://soundcloud.com/search/sounds?q=${encodeURIComponent(spotifyQ)}`;
     }
     coerceArtFindUrl(rec.art1);
-    coerceArtFindUrl(rec.art2);
+    if (rec.styleExplore && typeof rec.styleExplore === 'object') {
+        const se = rec.styleExplore;
+        const q = String(se.exploreSearchQuery || '').trim();
+        if (q && !String(se.exploreUrl || '').trim()) {
+            se.exploreUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+        }
+    }
     let trails = Array.isArray(rec.searchTrails) ? rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean) : [];
     while (trails.length < 3) trails.push('underground rap emotional texture scene');
     trails = trails.slice(0, 3);
@@ -451,9 +458,14 @@ ${entryText}
 Real track returned by ${src} search (query: "${used}"):
 ${trackFacts}
 
-Step-1 art targets (specific work + creator + medium):
+Step-1 art target (one specific work + creator + medium):
 - art1: medium="${step1.art1?.medium || ''}" workTitle="${step1.art1?.workTitle || ''}" creatorName="${step1.art1?.creatorName || ''}" findUrl="${step1.art1?.findUrl || ''}" fallbackSearchQuery="${step1.art1?.fallbackSearchQuery || ''}"
-- art2: medium="${step1.art2?.medium || ''}" workTitle="${step1.art2?.workTitle || ''}" creatorName="${step1.art2?.creatorName || ''}" findUrl="${step1.art2?.findUrl || ''}" fallbackSearchQuery="${step1.art2?.fallbackSearchQuery || ''}"`;
+
+Step-1 style to explore (aesthetic / movement / scene — not a second artwork):
+- styleExplore: styleLabel="${step1.styleExplore?.styleLabel || ''}" traditionOrScene="${step1.styleExplore?.traditionOrScene || ''}" whyThisFits="${String(step1.styleExplore?.whyThisFits || '')
+        .replace(/"/g, "'")
+        .replace(/\r?\n/g, ' ')
+        .slice(0, 450)}" exploreSearchQuery="${step1.styleExplore?.exploreSearchQuery || ''}"`;
 }
 
 function packArtSlot(step1Art, step2Reason, scoreNum) {
@@ -477,6 +489,23 @@ function packArtSlot(step1Art, step2Reason, scoreNum) {
     return slot;
 }
 
+function packStyleExplore(step1Style, step2Reason, scoreNum) {
+    const raw = step1Style && typeof step1Style === 'object' ? step1Style : {};
+    const sc = Number(scoreNum);
+    const q = String(raw.exploreSearchQuery || raw.searchQuery || '').trim();
+    const se = {
+        styleLabel: String(raw.styleLabel || '').trim(),
+        traditionOrScene: String(raw.traditionOrScene || '').trim(),
+        whyThisFits: String(raw.whyThisFits || '').trim(),
+        exploreSearchQuery: q,
+        reason: String(step2Reason || '').trim(),
+        matchScore: Number.isFinite(sc) ? sc : null,
+        exploreUrl: ''
+    };
+    if (q) se.exploreUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    return se;
+}
+
 function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCanonical) {
     const artistName = track.artists?.[0]?.name || 'Unknown';
     const songTitle = track.name || '—';
@@ -486,7 +515,7 @@ function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCano
     const listenQ = `${artistName} ${songTitle}`.trim();
     const mScore = Number(step2.musicMatchScore);
     const a1s = Number(step2.art1MatchScore);
-    const a2s = Number(step2.art2MatchScore);
+    const ss = Number(step2.styleExploreMatchScore);
     const rec = {
         primaryEmotion: step1.primaryEmotion || '',
         artist: {
@@ -502,7 +531,7 @@ function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCano
             albumCover: track.album?.images?.[0]?.url || null
         },
         art1: packArtSlot(step1.art1, step2.art1Reason, a1s),
-        art2: packArtSlot(step1.art2, step2.art2Reason, a2s),
+        styleExplore: packStyleExplore(step1.styleExplore, step2.styleExploreReason, ss),
         searchTrails: Array.isArray(step1.searchTrails) ? step1.searchTrails : [],
         searchUrls: []
     };
@@ -1070,6 +1099,30 @@ const initApp = async () => {
                 </article>`;
             }
 
+            if (it.kind === 'style') {
+                const se = snap;
+                const label = escapeHtml(String(se.styleLabel || '—'));
+                const scene = String(se.traditionOrScene || '').trim();
+                const url = String(se.exploreUrl || '').trim();
+                const why = escapeHtml(truncSnippet(String(se.whyThisFits || ''), 360));
+                const reason = escapeHtml(truncSnippet(String(se.reason || ''), 240));
+                const exploreLink = url
+                    ? `<p class="favorites-links"><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Search &amp; explore</a></p>`
+                    : '';
+                return `<article class="favorites-entry favorites-entry--style">
+                    ${metaBlock}
+                    <div class="favorites-entry-top">
+                        <span class="favorites-entry-kind">Style to explore</span>
+                        <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <h4 class="favorites-primary-line">${label}</h4>
+                    ${scene ? `<p class="favorites-entry-note">${escapeHtml(scene)}</p>` : ''}
+                    ${why ? `<p class="favorites-entry-note">${why}</p>` : ''}
+                    ${reason ? `<p class="favorites-entry-note">${reason}</p>` : ''}
+                    ${exploreLink}
+                </article>`;
+            }
+
             const fu = String(snap.findUrl || '').trim();
             const artName = String(snap.name || '—');
             const artType = String(snap.type || 'Art');
@@ -1120,7 +1173,7 @@ const initApp = async () => {
                     return;
                 }
                 let html =
-                    '<p class="favorites-doc-intro">Saved by <strong>mood</strong> — each card shows what you wrote that session and what you saved (music with streaming links, or art as a title link).</p><div class="favorites-doc">';
+                    '<p class="favorites-doc-intro">Saved by <strong>mood</strong> — each card shows what you wrote that session and what you saved (music with streaming links, one art link, or a style to explore).</p><div class="favorites-doc">';
                 for (const mood of moods) {
                     html += `<h3 class="favorites-mood-heading">${escapeHtml(mood)}</h3>`;
                     for (const it of byMood.get(mood)) {
@@ -1177,7 +1230,7 @@ const initApp = async () => {
             rec: null,
             historyArtist: [],
             historyArt1: [],
-            historyArt2: []
+            historyStyle: []
         };
 
         function openVibePanel() {
@@ -1204,7 +1257,7 @@ const initApp = async () => {
             let snapshot = null;
             if (kind === 'artist') snapshot = r.artist ? JSON.parse(JSON.stringify(r.artist)) : null;
             else if (kind === 'art1') snapshot = r.art1 ? JSON.parse(JSON.stringify(r.art1)) : null;
-            else if (kind === 'art2') snapshot = r.art2 ? JSON.parse(JSON.stringify(r.art2)) : null;
+            else if (kind === 'style') snapshot = r.styleExplore ? JSON.parse(JSON.stringify(r.styleExplore)) : null;
             if (!snapshot) return;
             const mood = String(vibeState.primaryEmotion || '').trim() || 'Uncategorized';
             try {
@@ -1273,7 +1326,16 @@ const initApp = async () => {
                       }
                     : undefined,
                 art1: pack(rec.art1),
-                art2: pack(rec.art2),
+                styleExplore: rec.styleExplore
+                    ? {
+                          styleLabel: rec.styleExplore.styleLabel,
+                          traditionOrScene: rec.styleExplore.traditionOrScene,
+                          whyThisFits: cut(rec.styleExplore.whyThisFits),
+                          exploreSearchQuery: rec.styleExplore.exploreSearchQuery,
+                          reason: cut(rec.styleExplore.reason),
+                          matchScore: rec.styleExplore.matchScore
+                      }
+                    : undefined,
                 searchTrails: rec.searchTrails,
                 searchUrls: rec.searchUrls
             });
@@ -1305,11 +1367,24 @@ ${entryText}
             if (!step1 || typeof step1 !== 'object') throw new Error('Invalid step-1 model response.');
             const canon = resolveCuratorArtistPick(step1.curatorArtistPick);
             const mood = String(step1.spotifyMoodKeywords ?? '').trim();
-            if (!String(step1.art1?.workTitle || '').trim() || !String(step1.art2?.workTitle || '').trim()) {
-                throw new Error('Each art slot needs a specific workTitle (named piece). Try again.');
+            if (!String(step1.art1?.workTitle || '').trim()) {
+                throw new Error('Art needs a specific workTitle (named piece). Try again.');
             }
-            if (!String(step1.art1?.creatorName || '').trim() || !String(step1.art2?.creatorName || '').trim()) {
-                throw new Error('Each art slot needs creatorName (artist / director / author). Try again.');
+            if (!String(step1.art1?.creatorName || '').trim()) {
+                throw new Error('Art needs creatorName (artist / director / author). Try again.');
+            }
+            const seRaw = step1.styleExplore;
+            if (!seRaw || typeof seRaw !== 'object') {
+                throw new Error('styleExplore is required (aesthetic / movement to match the journal). Try again.');
+            }
+            if (!String(seRaw.styleLabel || '').trim()) {
+                throw new Error('styleExplore.styleLabel is required (named style or scene). Try again.');
+            }
+            const exploreQ = String(seRaw.exploreSearchQuery || seRaw.searchQuery || '').trim();
+            if (!exploreQ) {
+                throw new Error(
+                    'styleExplore.exploreSearchQuery is required — a journal-specific search string. Try again.'
+                );
             }
 
             let { track, usedQuery, source } = await resolveTrackForCurator(step1.curatorArtistPick, mood);
@@ -1388,7 +1463,12 @@ Pick a **different** artist from the allowed list + new mood keywords. Avoid mim
                 const step1Preserve = {
                     primaryEmotion: vibeState.primaryEmotion,
                     art1: artSlotToStep1(rec.art1),
-                    art2: artSlotToStep1(rec.art2),
+                    styleExplore: {
+                        styleLabel: rec.styleExplore?.styleLabel,
+                        traditionOrScene: rec.styleExplore?.traditionOrScene,
+                        whyThisFits: rec.styleExplore?.whyThisFits,
+                        exploreSearchQuery: rec.styleExplore?.exploreSearchQuery
+                    },
                     searchTrails: rec.searchTrails
                 };
                 let step2 = await runExplainStep(entryText, track, step1Preserve, { source, usedQuery });
@@ -1417,9 +1497,47 @@ Pick a **different** artist from the allowed list + new mood keywords. Avoid mim
                 return;
             }
 
+            if (kind === 'style') {
+                const session = vibeSessionStamp();
+                const prevSlot = rec.styleExplore || {};
+                const artRef = rec.art1 || {};
+                const userP = `SESSION: ${session}
+
+Journal:
+---
+${entryText}
+---
+
+Reshuffle **style to explore** only — pick a **different named** aesthetic, movement, design language, or cultural scene that still fits this entry (not a second artwork).
+Previous styleLabel: ${prevSlot.styleLabel || ''}
+Previous exploreSearchQuery: ${prevSlot.exploreSearchQuery || ''}
+Previous whyThisFits (do not repeat): ${String(prevSlot.whyThisFits || '').slice(0, 400)}
+The user's concrete art pick this session (keep conceptually separate — do not duplicate this as a "style"): ${artRef.workTitle || ''} by ${artRef.creatorName || ''}
+exploreSearchQuery must be a fresh, journal-specific Google search string.
+Avoid repeating this combined key: "${avoidName}"`;
+
+                const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleStyleContract()}`, {
+                    temperature: 0.88,
+                    max_tokens: 1024
+                });
+                const j = parseVibeJsonFromResponse(data);
+                const q = String(j.exploreSearchQuery || '').trim();
+                rec.styleExplore = {
+                    styleLabel: String(j.styleLabel || '').trim(),
+                    traditionOrScene: String(j.traditionOrScene || '').trim(),
+                    whyThisFits: String(j.whyThisFits || '').trim(),
+                    exploreSearchQuery: q,
+                    reason: String(j.reason || '').trim(),
+                    matchScore: Number.isFinite(Number(j.styleMatchScore)) ? Number(j.styleMatchScore) : null,
+                    exploreUrl: q ? `https://www.google.com/search?q=${encodeURIComponent(q)}` : ''
+                };
+                vibeState.rec = normalizeRecommendationUrls(rec);
+                return;
+            }
+
             const session = vibeSessionStamp();
-            const other = kind === 'art1' ? rec.art2 : rec.art1;
-            const prevSlot = kind === 'art1' ? rec.art1 : rec.art2;
+            const other = rec.styleExplore || {};
+            const prevSlot = rec.art1 || {};
             const userP = `SESSION: ${session}
 
 Journal:
@@ -1427,10 +1545,10 @@ Journal:
 ${entryText}
 ---
 
-Reshuffle **${kind}** only — name a **different specific** work + creator + medium (interactive web, short film, writing, sculpture, installation, etc.).
+Reshuffle **art1** only — name a **different specific** work + creator + medium (interactive web, short film, writing, sculpture, installation, etc.).
 Previous workTitle: ${prevSlot?.workTitle || ''}
 Previous creatorName: ${prevSlot?.creatorName || ''}
-Other slot (stay different): ${other?.workTitle || ''} / ${other?.creatorName || ''}
+Other slot is **style to explore** (stay different in kind from this art): ${other?.styleLabel || ''} — ${other?.exploreSearchQuery || ''}
 Avoid repeating: "${avoidName}"`;
 
             const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleArtContract()}`, {
@@ -1455,11 +1573,7 @@ Avoid repeating: "${avoidName}"`;
             patch.youtubeSearchQuery =
                 buildArtSpecificSearchQuery(patch) || patch.youtubeSearchQuery;
             coerceArtFindUrl(patch);
-            if (kind === 'art1') {
-                rec.art1 = { ...rec.art1, ...patch };
-            } else {
-                rec.art2 = { ...rec.art2, ...patch };
-            }
+            rec.art1 = { ...rec.art1, ...patch };
             vibeState.rec = normalizeRecommendationUrls(rec);
         }
 
@@ -1471,7 +1585,7 @@ Avoid repeating: "${avoidName}"`;
             const r = vibeState.rec || {};
             const a = r.artist || {};
             const art1 = r.art1 || {};
-            const art2 = r.art2 || {};
+            const st = r.styleExplore || {};
             const trails = Array.isArray(r.searchTrails) ? r.searchTrails : [];
             const urls = Array.isArray(r.searchUrls) ? r.searchUrls : [];
             const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
@@ -1486,7 +1600,6 @@ Avoid repeating: "${avoidName}"`;
                     ? `<p class="vibe-match-score vibe-match-score--small">${escapeHtml(String(s))}/10</p>`
                     : '';
             const art1WorkLine = [art1.workTitle, art1.creatorName].filter(Boolean).join(' — ');
-            const art2WorkLine = [art2.workTitle, art2.creatorName].filter(Boolean).join(' — ');
             const trailsHtml = [0, 1, 2]
                 .map((i) => {
                     const t = trails[i] || '—';
@@ -1525,16 +1638,16 @@ Avoid repeating: "${avoidName}"`;
                             <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">Open link</button>
                         </div>
                     </div>
-                    <div class="vibe-rec-card" data-card="art2">
-                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art2" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
-                        <button type="button" class="vibe-reshuffle" data-reshuffle="art2" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-art2-inner">
-                            <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.medium || art2.type || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(art2.label || art2.name || '—')}</p>
-                            ${art2WorkLine ? `<p class="vibe-art-works-line">${escapeHtml(art2WorkLine)}</p>` : ''}
-                            ${artScore(art2.matchScore)}
-                            <p class="vibe-card-body">${escapeHtml(art2.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">Open link</button>
+                    <div class="vibe-rec-card vibe-rec-card--style" data-card="style">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="style" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="style" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-style-inner">
+                            <p class="vibe-card-kicker">Style to explore <span class="vibe-type-tag">${escapeHtml(st.traditionOrScene || '')}</span></p>
+                            <p class="vibe-card-title">${escapeHtml(st.styleLabel || '—')}</p>
+                            ${artScore(st.matchScore)}
+                            <p class="vibe-card-body">${escapeHtml(st.whyThisFits || '')}</p>
+                            ${st.reason ? `<p class="vibe-card-body vibe-card-body--friend">${escapeHtml(st.reason)}</p>` : ''}
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="style">Search &amp; explore</button>
                         </div>
                     </div>
                 </div>
@@ -1545,20 +1658,20 @@ Avoid repeating: "${avoidName}"`;
                 <p class="vibe-error hidden" id="vibe-step2-err"></p>`);
 
             const art1Url = art1.findUrl || '';
-            const art2Url = art2.findUrl || '';
+            const styleExploreUrl = st.exploreUrl || '';
 
             vibeStage.querySelector('[data-vibe-link="art1"]')?.addEventListener('click', () => {
                 if (art1Url) window.open(art1Url, '_blank', 'noopener,noreferrer');
             });
-            vibeStage.querySelector('[data-vibe-link="art2"]')?.addEventListener('click', () => {
-                if (art2Url) window.open(art2Url, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="style"]')?.addEventListener('click', () => {
+                if (styleExploreUrl) window.open(styleExploreUrl, '_blank', 'noopener,noreferrer');
             });
 
             vibeStage.querySelectorAll('[data-vibe-favorite]').forEach((btn) => {
                 btn.addEventListener('click', (ev) => {
                     ev.stopPropagation();
                     const k = btn.getAttribute('data-vibe-favorite');
-                    if (k === 'artist' || k === 'art1' || k === 'art2') void saveFavoriteFromVibe(k);
+                    if (k === 'artist' || k === 'art1' || k === 'style') void saveFavoriteFromVibe(k);
                 });
             });
 
@@ -1571,8 +1684,8 @@ Avoid repeating: "${avoidName}"`;
                     const x = vibeState.rec?.art1;
                     return String(x?.youtubeSearchQuery || x?.label || x?.name || '');
                 }
-                const x = vibeState.rec?.art2;
-                return String(x?.youtubeSearchQuery || x?.label || x?.name || '');
+                const x = vibeState.rec?.styleExplore;
+                return `${String(x?.styleLabel || '')}|${String(x?.exploreSearchQuery || '')}`;
             };
 
             vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
@@ -1592,7 +1705,7 @@ Avoid repeating: "${avoidName}"`;
                                 ? vibeState.historyArtist
                                 : kind === 'art1'
                                   ? vibeState.historyArt1
-                                  : vibeState.historyArt2;
+                                  : vibeState.historyStyle;
                         if (hist.includes(nextName) || nextName === prevName) {
                             if (errEl) {
                                 errEl.textContent = 'Got a duplicate suggestion — try reshuffle again.';
@@ -1601,7 +1714,7 @@ Avoid repeating: "${avoidName}"`;
                         } else {
                             if (kind === 'artist') vibeState.historyArtist.push(nextName);
                             else if (kind === 'art1') vibeState.historyArt1.push(nextName);
-                            else vibeState.historyArt2.push(nextName);
+                            else vibeState.historyStyle.push(nextName);
                         }
                         renderResultsStep();
                     } catch (e) {
@@ -1811,7 +1924,7 @@ Avoid repeating: "${avoidName}"`;
             vibeState.rec = null;
             vibeState.historyArtist = [];
             vibeState.historyArt1 = [];
-            vibeState.historyArt2 = [];
+            vibeState.historyStyle = [];
             openVibePanel();
             const slimeServersMsg =
                 'SlimeServers are still connecting... wait 1 more second for me 5';
@@ -1863,7 +1976,7 @@ Avoid repeating: "${avoidName}"`;
                 vibeState.rec = {
                     artist: full.artist,
                     art1: full.art1,
-                    art2: full.art2,
+                    styleExplore: full.styleExplore,
                     searchTrails: full.searchTrails,
                     searchUrls: full.searchUrls
                 };
@@ -1878,13 +1991,8 @@ Avoid repeating: "${avoidName}"`;
                             ''
                     )
                 ];
-                vibeState.historyArt2 = [
-                    String(
-                        vibeState.rec?.art2?.youtubeSearchQuery ||
-                            vibeState.rec?.art2?.label ||
-                            vibeState.rec?.art2?.name ||
-                            ''
-                    )
+                vibeState.historyStyle = [
+                    `${String(vibeState.rec?.styleExplore?.styleLabel || '')}|${String(vibeState.rec?.styleExplore?.exploreSearchQuery || '')}`
                 ];
                 renderResultsStep();
             } catch (e) {

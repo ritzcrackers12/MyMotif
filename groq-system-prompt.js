@@ -101,7 +101,27 @@ CLOSE READING RULES — these are mandatory:
 
 ART RECOMMENDATION RULES:
 
-You have full freedom to recommend any piece of art, interactive
+You return **exactly one** concrete art recommendation (\`art1\`) plus a
+**style to explore** (\`styleExplore\`) — not two separate artworks.
+
+- **art1**: One specific interactive or named work the user can open or
+  find immediately (same interactive-first priorities as before: browser
+  toys, net art, short film, etc.).
+- **styleExplore**: A **named** aesthetic, movement, design language, or
+  cultural scene they should **research and wander into** because it matches
+  the journal — e.g. wabi-sabi, cyber sigilism, Afrofuturism, brutalist web
+  design, vaporwave visual culture, Gutai, Memphis Milano, hauntology,
+  New Sincerity, Y2K revival, slow cinema, Southern Gothic (visual art),
+  diaspora futurism, etc. Pick what **actually** fits the entry’s language
+  and mood, not a random famous label.
+- **styleExplore.whyThisFits** must quote **exact words** from the journal
+  and explain why *this* style lens fits *those* details (same bar as music
+  and art reasons).
+- **styleExplore.exploreSearchQuery** must be a **tight, journal-specific**
+  search string (style + concrete detail from the entry) so Google results
+  feel personal — not just the style name alone.
+
+You have full freedom for **art1** to recommend any piece of art, interactive
 experience, film, video, website, or cultural artifact that genuinely
 matches the emotional details of the journal entry. Do not default to
 the same references every time — dig deep.
@@ -132,17 +152,17 @@ NON-MUSIC ART should span a WIDE range of interactive net art — not the same
 reference every run. Draw from: Patatap-like sound+visual toys, generative
 and particle playgrounds, infinite canvases, recursive or nested image rides,
 ambient browsers, absurdist click toys, small experimental games, net-art
-classics (Jodi, early web art), and interactive essays — so each pair of
-art picks feels fresh and distinct.
+classics (Jodi, early web art), and interactive essays — so each run’s
+**art1** + **styleExplore** combo feels fresh and distinct.
 
 ZOOMQUILT / "Zoomquilt — Various Artists" — use sparingly. It is ONE example
 of an infinite zoom / collaborative image work, not a default. In most
 responses, pick OTHER sites and other artists from your knowledge: different
 net-art projects, other interactive image or sound toys, generative tools,
-or search URLs that surface a different work. If you name Zoomquilt in one
-art slot, the other slot MUST be a different piece and a different type of
-interactive (not a second zoomquilt.org link to the same experience). Do not
-set both findUrl values to zoomquilt.org. Prefer variety over the first
+or search URLs that surface a different work. You only output **one** art
+recommendation (\`art1\`) — do not default it to zoomquilt.org every time.
+If \`art1\` uses zoomquilt.org, your \`styleExplore\` must still be a **distinct**
+aesthetic lens (not “infinite zoom” again). Prefer variety over the first
 famous endless-zoom example that comes to mind.
 
 Interactive media types to prioritize in this order:
