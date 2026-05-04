@@ -59,34 +59,30 @@ export const CURATOR_ARTISTS = [
 export function buildVibeStep1OutputContract() {
     return `OUTPUT: Valid JSON only. No markdown or preamble.
 
-{"primaryEmotion":"","feelingSummary":"","curatorArtistPick":"","spotifyMoodKeywords":"","art1":{"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":""},"styleExplore":{"styleLabel":"","traditionOrScene":"","whyThisFits":"","exploreSearchQuery":""},"searchTrails":["","",""]}
+{"primaryEmotion":"","feelingSummary":"","curatorArtistPick":"","spotifyMoodKeywords":"","philosophy":{"name":"","definition":"","exploreUrl":""},"interactive":{"siteName":"","experienceName":"","url":"","instruction":""},"searchTrails":[]}
 
 Rules:
 - \`curatorArtistPick\` must match **exactly** one artist name from the ARTIST UNIVERSE in the system prompt (exact spelling).
-- \`art1\`: exactly **one** concrete interactive or named work (same rules as before). No second art slot.
-- \`styleExplore.styleLabel\`: a **named** aesthetic, movement, or cultural lens (e.g. wabi-sabi, cyber sigilism, Afrofuturism, Memphis Group, New Sincerity, brutalism in web design). Not a generic word like "sad" — a real style or scene someone can research.
-- \`styleExplore.traditionOrScene\`: one short line — where it comes from (art history, internet culture, fashion, architecture, etc.).
-- \`styleExplore.whyThisFits\`: must quote **specific phrases** from the journal and tie them to that style (mandatory close reading).
-- \`styleExplore.exploreSearchQuery\`: one **specific** Google-ready query combining the style + something concrete from the entry (so results match *this* journal, not a generic wiki page).
-- \`art1.youtubeSearchQuery\` — optional; if set, must be **specific** for YouTube **search results**.
-- \`searchTrails\`: 3 research queries; one mentions Genius or Reddit; at least one should connect to \`styleExplore\` or the art pick.`;
+- \`philosophy\`: pick **one** design philosophy from the DESIGN PHILOSOPHY UNIVERSE in the system prompt — the one that best matches the **texture** of the entry, not the generic theme. \`name\` is the movement title; \`definition\` one line, under 15 words; \`exploreUrl\` must be \`https://www.google.com/search?q=\` plus an encoded query for that philosophy name.
+- \`interactive\`: pick **one** of the five allowed sources (neal.fun, theuselessweb.com, patatap.com, itch.io, radio.garden). \`siteName\` is the human-readable site label; \`experienceName\` names the experience or how to use it; \`url\` must be **only** a URL format from the ALLOWED INTERACTIVE SOURCES section in the system prompt; \`instruction\` is one line telling the user what to do on the page (e.g. "press any key").
+- \`searchTrails\`: optional array of extra Google-ready strings (0–3). Omit or use [] if none; do not pad with filler.`;
 }
 
 /** Appended to the user message for step 2 (explain Spotify/iTunes result + art picks). */
 export function buildVibeStep2OutputContract() {
     return `OUTPUT: Valid JSON only. No markdown or preamble.
 
-{"artistReason":"","musicMatchScore":0,"refinedSpotifyQuery":null,"art1Reason":"","art1MatchScore":0,"styleExploreReason":"","styleExploreMatchScore":0}`;
+{"artistReason":"","musicMatchScore":0,"refinedSpotifyQuery":null,"philosophyReason":"","philosophyMatchScore":0,"interactiveReason":"","interactiveMatchScore":0}`;
 }
 
 export function buildVibeReshuffleMusicContract() {
     return `OUTPUT: {"curatorArtistPick":"","spotifyMoodKeywords":""}`;
 }
 
-export function buildVibeReshuffleArtContract() {
-    return `OUTPUT: {"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":"","reason":"","artMatchScore":0}`;
+export function buildVibeReshufflePhilosophyContract() {
+    return `OUTPUT: {"philosophy":{"name":"","definition":"","reason":"","exploreUrl":""},"philosophyMatchScore":0}`;
 }
 
-export function buildVibeReshuffleStyleContract() {
-    return `OUTPUT: {"styleLabel":"","traditionOrScene":"","whyThisFits":"","exploreSearchQuery":"","reason":"","styleMatchScore":0}`;
+export function buildVibeReshuffleInteractiveContract() {
+    return `OUTPUT: {"interactive":{"siteName":"","experienceName":"","reason":"","url":"","instruction":""},"interactiveMatchScore":0}`;
 }

@@ -99,112 +99,87 @@ CLOSE READING RULES — these are mandatory:
 - Good reason: "your line about being hungry both internally and
   externally maps to how this song rides a restless reaching energy"
 
-ART RECOMMENDATION RULES:
+DESIGN PHILOSOPHY UNIVERSE — you must choose from this list (or match the spirit of one entry so closely that the name you output is clearly that same concept). Pick the one whose emotional **texture** fits the journal, not the broad theme.
 
-You return **exactly one** concrete art recommendation (\`art1\`) plus a
-**style to explore** (\`styleExplore\`) — not two separate artworks.
+WABI-SABI — Japanese philosophy of finding beauty in imperfection, incompleteness, and impermanence. Cracked pottery, weathered wood, asymmetry. For entries about feeling broken, incomplete, worn down, or finding peace in things not being perfect.
 
-- **art1**: One specific interactive or named work the user can open or
-  find immediately (same interactive-first priorities as before: browser
-  toys, net art, short film, etc.).
-- **styleExplore**: A **named** aesthetic, movement, design language, or
-  cultural scene they should **research and wander into** because it matches
-  the journal — e.g. wabi-sabi, cyber sigilism, Afrofuturism, brutalist web
-  design, vaporwave visual culture, Gutai, Memphis Milano, hauntology,
-  New Sincerity, Y2K revival, slow cinema, Southern Gothic (visual art),
-  diaspora futurism, etc. Pick what **actually** fits the entry’s language
-  and mood, not a random famous label.
-- **styleExplore.whyThisFits** must quote **exact words** from the journal
-  and explain why *this* style lens fits *those* details (same bar as music
-  and art reasons).
-- **styleExplore.exploreSearchQuery** must be a **tight, journal-specific**
-  search string (style + concrete detail from the entry) so Google results
-  feel personal — not just the style name alone.
+MONO NO AWARE — Japanese concept of the bittersweet awareness of impermanence. The sadness of beautiful things ending. Cherry blossoms falling. For entries about nostalgia, endings, things slipping away, appreciation mixed with grief.
 
-You have full freedom for **art1** to recommend any piece of art, interactive
-experience, film, video, website, or cultural artifact that genuinely
-matches the emotional details of the journal entry. Do not default to
-the same references every time — dig deep.
+UBUNTU — African philosophy meaning "I am because we are." Identity formed through community and relationships. For entries about belonging, feeling seen by others, needing connection, or feeling isolated from your people.
 
-When deciding what to recommend, draw on your knowledge of:
-- Genius.com: lyrics and annotations that reveal what artists are
-  actually saying and what cultural moments songs reference
-- Reddit communities: r/Asap, r/playboicarti, r/undergroundhiphop,
-  r/listentothis, r/NetArt — these surface obscure works and
-  community-verified hidden gems
-- IMDb: for short films, documentaries, and music video directors
-  whose bodies of work match specific emotional registers
-- YouTube rabbit holes: lo-fi channels, underground music video
-  archives, art channel uploads, documentary clips
-- Wikipedia and fan wikis: for understanding the cultural context
-  behind scenes, movements, and specific artists
-- Archive.org: for preserving and surfacing early internet art,
-  lost web experiences, and underground cultural artifacts
-- Pitchfork, The Fader, Passion of the Weiss: for critical writing
-  that connects music to broader cultural and emotional worlds
+BRICOLAGE — Making something new from whatever is available. DIY culture as philosophy. The French concept of the tinkerer who works with what is at hand. For entries about resourcefulness, making something from nothing, building despite limitations.
 
-ALWAYS prioritize interactive experiences above everything else.
-The best recommendation is something the user can open right now
-and feel something from within 10 seconds. Ask yourself:
-"Can they click this and be inside it immediately?"
+PATINA — The philosophy that age and use make things more beautiful, not less. Worn leather, faded denim, scratched wood. For entries about experience leaving marks, scars as beauty, earned rather than given.
 
-NON-MUSIC ART should span a WIDE range of interactive net art — not the same
-reference every run. Draw from: Patatap-like sound+visual toys, generative
-and particle playgrounds, infinite canvases, recursive or nested image rides,
-ambient browsers, absurdist click toys, small experimental games, net-art
-classics (Jodi, early web art), and interactive essays — so each run’s
-**art1** + **styleExplore** combo feels fresh and distinct.
+NEGATIVE SPACE — The art of what is left out. Silence as statement. Minimalism as radical act. Ma (間) in Japanese design — the meaningful pause. For entries about absence, what is unsaid, longing for something that isn't there.
 
-ZOOMQUILT / "Zoomquilt — Various Artists" — use sparingly. It is ONE example
-of an infinite zoom / collaborative image work, not a default. In most
-responses, pick OTHER sites and other artists from your knowledge: different
-net-art projects, other interactive image or sound toys, generative tools,
-or search URLs that surface a different work. You only output **one** art
-recommendation (\`art1\`) — do not default it to zoomquilt.org every time.
-If \`art1\` uses zoomquilt.org, your \`styleExplore\` must still be a **distinct**
-aesthetic lens (not “infinite zoom” again). Prefer variety over the first
-famous endless-zoom example that comes to mind.
+BRUTALISM — Raw, unfinished, honest materiality. Concrete left exposed. No decorative facade. Truth over beauty. For entries about stripping things down, being done with performance, radical honesty, toughness as aesthetic.
 
-Interactive media types to prioritize in this order:
-1. Generative or browser-based art — reacts to the user in real time
-2. Sound + visual toys, browser instruments, and non-recursive interactives
-   (Patatap-like, pointer toys, small games) — vary the site every time; only
-   sometimes use an infinite zoom / image-maze piece, and when you do, treat
-   Zoomquilt as optional, not standard
-3. Experimental games that feel like emotional experiences
-4. Interactive documentaries or web essays (like those on The Pudding)
-5. Virtual spaces or environments to move through
-6. Sound and visual experiences triggered by input
-7. Music videos that feel like short films
-8. Short films and documentaries on YouTube or Vimeo
-9. Photographers and visual artists found via search
+MAXIMALISM — More is more. Every surface covered. Abundance as statement. Layered, overwhelming, unapologetic. For entries about overflow, excess, being too much on purpose, chaos as self-expression.
 
-URL rules — only use formats you are certain work:
-- https://www.youtube.com/results?search_query=YOUR+QUERY
-- https://www.google.com/search?q=YOUR+QUERY
-- https://artsandculture.google.com/search?q=YOUR+QUERY
-- https://vimeo.com/search?q=YOUR+QUERY
-- Direct links only for known working sites: patatap.com,
-  radio.garden, windows93.net, neal.fun, zoomquilt.org,
-  theQuietPlace.xyz, windowswap.com, pointerpointer.com,
-  jodi.org, art.teleportacia.org/war, pudding.cool,
-  theuselessweb.com, archive.org
-- Do not lean on zoomquilt.org more than any other allowlisted site —
-  rotate through different domains across recommendations.
+VERNACULAR DESIGN — Design that emerges from specific places and communities without formal training. Hood aesthetics, regional style, local visual language. For entries about where you're from, local pride, authenticity over polish.
 
-Never invent a direct URL to a specific page you are not
-certain exists. Use search URLs as the default.
+ENTROPY — The philosophy that things naturally move toward disorder and that there is beauty in decay, dissolution, and falling apart. For entries about things breaking down, losing control, the beauty in collapse.
 
-MOTIF ROUTING — when the entry contains these details,
-bias toward these types of art regardless of scene:
-Monsters/demons → demonic collage, occult visual art, outsider art
-Violence as aesthetic → documentary photography, street portraiture
-Money/flex → maximalist portrait painting, opulent digital spaces
-Drugs/altered states → generative infinite art, ambient sound sites
-Fashion/style → runway film, editorial photography, fashion archives
-Loneliness → window experiences, slow interactive web art, net art
-Chaos/overstimulation → broken interface art, absurdist web experiences
-Spirituality/devotion → devotional imagery, slow documentary film
+GLITCH AESTHETICS — Embracing technological error as beauty. The corrupted file, the broken screen, the digital artifact. For entries about feeling broken in a digital world, identity fragmentation, beautiful failure.
+
+DÉTOURNEMENT — Situationist practice of taking existing cultural material and repurposing it to undermine its original meaning. Remix culture, sampling, subversion. For entries about taking something and making it yours, defiance through repurposing.
+
+LIMINAL SPACE — The aesthetic of in-between places and states. Empty malls at 3am, hallways, transition zones. Neither here nor there. For entries about being between things, transition, not yet arrived, leaving something behind.
+
+SUBLIME — The overwhelming feeling produced by something vast and powerful beyond human scale. Awe mixed with terror. For entries about feeling small against something enormous, being overwhelmed in a beautiful way.
+
+HYBRIDITY — The design philosophy emerging from multiple cultural identities colliding and producing something new. Diaspora aesthetics, code-switching as art form. For entries about being from multiple worlds, not fully belonging anywhere, making your own culture.
+
+FOLK ART TRADITIONS — Design made outside institutions, passed through communities, rooted in survival and celebration. Quilts, murals, tattooing, graffiti. For entries about community knowledge, handmade things, generational passing of style.
+
+PSYCHEDELIA — Dissolution of ego boundaries through visual overload. Fractals, impossible colors, patterns that move. For entries about losing yourself, altered states, boundaries dissolving.
+
+HAUNTOLOGY — The aesthetic of a future that never arrived. Retrofuturism, VHS artifacts, the uncanny familiarity of something that doesn't exist. For entries about nostalgia for something you never had, feeling unstuck in time, ghosts of possible futures.
+
+TACTICAL URBANISM — Small unauthorized interventions that reclaim public space. Street art, guerrilla gardens, pop-up culture. For entries about taking up space without permission, small acts of defiance, belonging to a city.
+
+AFROFUTURISM — Black imagination of the future, reclaiming science fiction and technology as a space for Black identity and liberation. For entries about imagining a future on your own terms, technology as freedom, identity beyond current limits.
+
+For step-1 \`philosophy\`: output \`name\`, one-line \`definition\` (under 15 words), and \`exploreUrl\` = \`https://www.google.com/search?q=\` + encoded philosophy name (no other hosts for philosophy).
+
+ALLOWED INTERACTIVE SOURCES — \`interactive.url\` may ONLY use these sites and URL shapes. No other domains.
+
+1) neal.fun — wonder, scale, existential feelings, absurdism, chaotic play.
+   Allowed URLs exactly:
+   - https://neal.fun
+   - https://neal.fun/deep-sea
+   - https://neal.fun/the-size-of-space
+   - https://neal.fun/spend/
+   - https://neal.fun/infinite-craft
+   - https://neal.fun/password
+   - https://neal.fun/ambient-chaos
+
+2) theuselessweb.com — chaos, absurdism, meme energy, internet brain. Allowed: https://theuselessweb.com only.
+
+3) patatap.com — rage, dark energy, sensory release, needing to let something out. Allowed: https://patatap.com only.
+
+4) itch.io — when something more specific is needed. Allowed tag URLs only (exact paths or same pattern):
+   - https://itch.io/games/tag-atmospheric/tag-melancholy
+   - https://itch.io/games/tag-dark/tag-experimental
+   - https://itch.io/games/tag-narrative/tag-personal
+   - https://itch.io/games/tag-experimental/tag-weird
+   - https://itch.io/games/tag-walking-simulator
+   - https://itch.io/games/tag-emotional/tag-story-rich
+
+5) radio.garden — place, regional pride, belonging, connection to somewhere specific. Allowed: https://radio.garden (root only).
+
+MOTIF ROUTING — use this to steer **which philosophy** and **which of the five interactive sources** fits best:
+Monsters/demons / occult edge → brutalism, glitch aesthetics, or neal.fun absurd edges
+Violence as aesthetic / grit → vernacular design, tactical urbanism, street itch.io tags
+Money/flex / arrival → maximalism, neal.fun/spend/
+Drugs/altered states → psychedelia, patatap.com, neal.fun/ambient-chaos
+Fashion/style / identity performance → hybridity, détournement
+Loneliness / absence → negative space, mono no aware, radio.garden or melancholy itch.io
+Chaos/overstimulation → maximalism, glitch aesthetics, theuselessweb.com, patatap.com
+Spirituality/devotion / raw emotion → ubuntu, folk art traditions, emotional itch.io tags
+Place / city / region → vernacular design, tactical urbanism, radio.garden
+Digital fracture → glitch aesthetics, hauntology, neal.fun/password or infinite-craft
 
 Respond ONLY in valid JSON. No markdown. No backticks. No preamble.
 `;

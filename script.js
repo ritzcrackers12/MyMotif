@@ -26,8 +26,8 @@ import {
     buildVibeStep1OutputContract,
     buildVibeStep2OutputContract,
     buildVibeReshuffleMusicContract,
-    buildVibeReshuffleArtContract,
-    buildVibeReshuffleStyleContract
+    buildVibeReshufflePhilosophyContract,
+    buildVibeReshuffleInteractiveContract
 } from './curator-prompt.js';
 
 /** Prefer model watch/results URL; else YouTube search for artist + song. */
@@ -106,103 +106,94 @@ function buildSpotifySearchQueryForCurator(canonicalArtist, moodKeywords) {
     return kw ? `artist:"${esc}" ${kw}` : `artist:"${esc}"`;
 }
 
-function buildArtSpecificSearchQuery(art) {
-    const wt = String(art?.workTitle || '').trim();
-    const cr = String(art?.creatorName || '').trim();
-    const med = String(art?.medium || art?.type || '').trim();
-    const fb = String(art?.fallbackSearchQuery || '').trim();
-    if (fb) return fb;
-    if (wt && cr) return `"${wt.replace(/"/g, '')}" ${cr} ${med}`.trim();
-    return String(art?.youtubeSearchQuery || '').trim();
-}
-
-function pickArtPrimaryFindUrl(art) {
-    const direct = String(art?.findUrl || '').trim();
-    if (direct && urlPassesArtFindPolicy(direct)) return direct;
-    const q = buildArtSpecificSearchQuery(art);
-    return `https://www.google.com/search?q=${encodeURIComponent(q || 'installation sculpture')}`;
-}
-
 /** Unique id per vibe run so Groq treats each journal click as a fresh curation. */
 function vibeSessionStamp() {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/** Portfolio, fashion editorial, creative hosts allowed for art findUrl (no YouTube — music uses artist.songYoutubeUrl). */
-function creativePortfolioHost(h) {
-    const roots = [
-        'behance.net',
-        'artstation.com',
-        'carbonmade.com',
-        'readymag.com',
-        'cargo.site',
-        'are.na',
-        'dribbble.com',
-        'awwwards.com',
-        'artsy.net',
-        'saatchiart.com',
-        'wikiart.org',
-        'ssense.com',
-        'vogue.com',
-        '1stdibs.com',
-        'highsnobiety.com'
-    ];
-    for (const r of roots) {
-        if (h === r || h.endsWith('.' + r)) return true;
-    }
-    if (h.endsWith('.github.io')) return true;
-    if (h === 'glitch.me' || h.endsWith('.glitch.me')) return true;
-    return false;
+function googleExploreUrlForPhilosophyName(name) {
+    const q = String(name || '').trim();
+    return `https://www.google.com/search?q=${encodeURIComponent(q || 'design philosophy')}`;
 }
 
-function urlPassesArtFindPolicy(url) {
-    if (!url || typeof url !== 'string') return false;
-    try {
-        const u = new URL(url);
-        const h = u.hostname.replace(/^www\./, '');
-        /* Video art / short film: direct watch links allowed when video id looks valid. */
-        if (youtubeHost(h)) {
-            if (u.pathname.startsWith('/results')) return true;
-            if (u.searchParams.has('search_query')) return true;
-            if (u.pathname === '/watch' && isLikelyYoutubeVideoId(u.searchParams.get('v') || '')) return true;
-            if (u.pathname.startsWith('/shorts/')) {
-                const id = u.pathname.replace(/^\/shorts\//, '').split('/')[0];
-                if (isLikelyYoutubeVideoId(id)) return true;
+function coercePhilosophyExploreUrl(ph) {
+    if (!ph || typeof ph !== 'object') return;
+    const name = String(ph.name || '').trim();
+    const raw = String(ph.exploreUrl || '').trim();
+    if (raw) {
+        try {
+            const u = new URL(raw);
+            const h = u.hostname.replace(/^www\./, '');
+            if (h === 'google.com' && u.pathname.startsWith('/search')) {
+                ph.exploreUrl = raw;
+                return;
             }
-            return false;
+        } catch {
+            /* fall through */
         }
-        if (u.hostname === 'youtu.be') {
-            const id = u.pathname.replace(/^\//, '').split('/')[0];
-            return isLikelyYoutubeVideoId(id);
-        }
-        if (h === 'vimeo.com') {
-            if (u.pathname.startsWith('/search')) return true;
-            if (/^\/\d+(?:\/|$)/.test(u.pathname)) return true;
-        }
-        if (h === 'artsandculture.google.com') return true;
-        if (h === 'archive.org') return true;
-        if (h === 'google.com' && (u.searchParams.get('tbm') === 'isch' || u.pathname.startsWith('/search')))
-            return true;
-        const museums = ['moma.org', 'metmuseum.org', 'tate.org.uk'];
-        if (museums.some((m) => h === m || h.endsWith('.' + m))) return true;
-        const knownLive = ['patatap.com', 'radio.garden', 'windows93.net', 'thequietplace.xyz', 'neal.fun'];
-        if (knownLive.includes(h)) return true;
-        if (h === 'instagram.com' && /^\/(p|reel|tv)\/[\w-]+/.test(u.pathname)) return true;
-        if (creativePortfolioHost(h)) return true;
-        if (h === 'letterboxd.com' && /\/film\//.test(u.pathname)) return true;
-        if (h === 'medium.com' && /^\/[\w-]+\/[\w-]+/.test(u.pathname)) return true;
-        if (h.endsWith('.substack.com') && /^\/p\/[\w-]+/.test(u.pathname)) return true;
-        if (h === 'newgrounds.com' && /^\/portal\/view\//.test(u.pathname)) return true;
-        if ((h === 'itch.io' || h.endsWith('.itch.io')) && u.pathname.length > 1) return true;
-        return false;
+    }
+    ph.exploreUrl = googleExploreUrlForPhilosophyName(name);
+}
+
+const INTERACTIVE_URL_CANON = new Set(
+    [
+        'https://neal.fun',
+        'https://neal.fun/deep-sea',
+        'https://neal.fun/the-size-of-space',
+        'https://neal.fun/spend/',
+        'https://neal.fun/infinite-craft',
+        'https://neal.fun/password',
+        'https://neal.fun/ambient-chaos',
+        'https://theuselessweb.com',
+        'https://patatap.com',
+        'https://radio.garden',
+        'https://itch.io/games/tag-atmospheric/tag-melancholy',
+        'https://itch.io/games/tag-dark/tag-experimental',
+        'https://itch.io/games/tag-narrative/tag-personal',
+        'https://itch.io/games/tag-experimental/tag-weird',
+        'https://itch.io/games/tag-walking-simulator',
+        'https://itch.io/games/tag-emotional/tag-story-rich'
+    ].map((s) => canonicalizeInteractiveUrlString(s))
+);
+
+function canonicalizeInteractiveUrlString(raw) {
+    const u = new URL(String(raw).trim());
+    u.hash = '';
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    let path = u.pathname || '/';
+    if (h === 'neal.fun') {
+        if (path !== '/' && path.endsWith('/')) path = path.slice(0, -1);
+        if (path === '/spend') path = '/spend/';
+    } else if (h === 'itch.io') {
+        if (path.endsWith('/')) path = path.slice(0, -1);
+    } else if (h === 'theuselessweb.com' || h === 'patatap.com' || h === 'radio.garden') {
+        path = '/';
+    }
+    return `https://${h}${path === '/' ? '' : path}`;
+}
+
+function urlPassesInteractiveAllowlist(raw) {
+    if (!raw || typeof raw !== 'string') return false;
+    try {
+        const key = canonicalizeInteractiveUrlString(raw);
+        return INTERACTIVE_URL_CANON.has(key);
     } catch {
         return false;
     }
 }
 
-function coerceArtFindUrl(art) {
-    if (!art || typeof art !== 'object') return;
-    art.findUrl = pickArtPrimaryFindUrl(art);
+function interactiveSourceLabelFromUrl(url) {
+    try {
+        const h = new URL(String(url).trim()).hostname.replace(/^www\./, '').toLowerCase();
+        if (h === 'neal.fun') return 'neal.fun';
+        if (h === 'theuselessweb.com') return 'theuselessweb.com';
+        if (h === 'patatap.com') return 'patatap.com';
+        if (h === 'itch.io') return 'itch.io';
+        if (h === 'radio.garden') return 'radio.garden';
+        return h;
+    } catch {
+        return '';
+    }
 }
 
 function normalizeRecommendationUrls(rec) {
@@ -222,19 +213,22 @@ function normalizeRecommendationUrls(rec) {
         rec.artist.songYoutubeUrl = resolveYoutubeSongUrl(ytCandidate, spotifyQ);
         rec.artist.songSoundcloudUrl = `https://soundcloud.com/search/sounds?q=${encodeURIComponent(spotifyQ)}`;
     }
-    coerceArtFindUrl(rec.art1);
-    if (rec.styleExplore && typeof rec.styleExplore === 'object') {
-        const se = rec.styleExplore;
-        const q = String(se.exploreSearchQuery || '').trim();
-        if (q && !String(se.exploreUrl || '').trim()) {
-            se.exploreUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    if (rec.philosophy && typeof rec.philosophy === 'object') coercePhilosophyExploreUrl(rec.philosophy);
+    if (rec.interactive && typeof rec.interactive === 'object') {
+        const url = String(rec.interactive.url || '').trim();
+        if (url && urlPassesInteractiveAllowlist(url)) {
+            try {
+                rec.interactive.url = canonicalizeInteractiveUrlString(url);
+            } catch {
+                /* keep raw */
+            }
         }
     }
-    let trails = Array.isArray(rec.searchTrails) ? rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean) : [];
-    while (trails.length < 3) trails.push('underground rap emotional texture scene');
-    trails = trails.slice(0, 3);
+    const trails = Array.isArray(rec.searchTrails)
+        ? rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 3)
+        : [];
     rec.searchTrails = trails;
-    rec.searchUrls = trails.map((t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`);
+    rec.searchUrls = trails.length ? trails.map((t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`) : [];
     return rec;
 }
 
@@ -458,52 +452,53 @@ ${entryText}
 Real track returned by ${src} search (query: "${used}"):
 ${trackFacts}
 
-Step-1 art target (one specific work + creator + medium):
-- art1: medium="${step1.art1?.medium || ''}" workTitle="${step1.art1?.workTitle || ''}" creatorName="${step1.art1?.creatorName || ''}" findUrl="${step1.art1?.findUrl || ''}" fallbackSearchQuery="${step1.art1?.fallbackSearchQuery || ''}"
-
-Step-1 style to explore (aesthetic / movement / scene — not a second artwork):
-- styleExplore: styleLabel="${step1.styleExplore?.styleLabel || ''}" traditionOrScene="${step1.styleExplore?.traditionOrScene || ''}" whyThisFits="${String(step1.styleExplore?.whyThisFits || '')
+Step-1 design philosophy (from DESIGN PHILOSOPHY UNIVERSE):
+- philosophy: name="${step1.philosophy?.name || ''}" definition="${String(step1.philosophy?.definition || '')
         .replace(/"/g, "'")
         .replace(/\r?\n/g, ' ')
-        .slice(0, 450)}" exploreSearchQuery="${step1.styleExplore?.exploreSearchQuery || ''}"`;
+        .slice(0, 220)}" exploreUrl="${step1.philosophy?.exploreUrl || ''}"
+
+Step-1 interactive experience (one of the five allowed sources only):
+- interactive: siteName="${step1.interactive?.siteName || ''}" experienceName="${String(step1.interactive?.experienceName || '')
+        .replace(/"/g, "'")
+        .replace(/\r?\n/g, ' ')
+        .slice(0, 220)}" url="${step1.interactive?.url || ''}" instruction="${String(step1.interactive?.instruction || '')
+        .replace(/"/g, "'")
+        .replace(/\r?\n/g, ' ')
+        .slice(0, 160)}"`;
 }
 
-function packArtSlot(step1Art, step2Reason, scoreNum) {
+function packPhilosophy(step1Ph, step2Reason, scoreNum) {
     const sc = Number(scoreNum);
-    const slot = {
-        label: String(step1Art?.label || 'Art').trim(),
-        name: String(step1Art?.label || 'Art').trim(),
-        type: String(step1Art?.type || '').trim(),
-        medium: String(step1Art?.medium || '').trim(),
-        workTitle: String(step1Art?.workTitle || '').trim(),
-        creatorName: String(step1Art?.creatorName || '').trim(),
-        fallbackSearchQuery: String(step1Art?.fallbackSearchQuery || '').trim(),
-        findUrl: String(step1Art?.findUrl || '').trim(),
+    const ph = {
+        name: String(step1Ph?.name || '').trim(),
+        definition: String(step1Ph?.definition || '').trim(),
         reason: String(step2Reason || '').trim(),
-        matchScore: Number.isFinite(sc) ? sc : null,
-        youtubeSearchQuery: ''
+        exploreUrl: String(step1Ph?.exploreUrl || '').trim(),
+        matchScore: Number.isFinite(sc) ? sc : null
     };
-    slot.youtubeSearchQuery =
-        buildArtSpecificSearchQuery(slot) || String(step1Art?.youtubeSearchQuery || '').trim();
-    coerceArtFindUrl(slot);
-    return slot;
+    coercePhilosophyExploreUrl(ph);
+    return ph;
 }
 
-function packStyleExplore(step1Style, step2Reason, scoreNum) {
-    const raw = step1Style && typeof step1Style === 'object' ? step1Style : {};
+function packInteractive(step1Ix, step2Reason, scoreNum) {
     const sc = Number(scoreNum);
-    const q = String(raw.exploreSearchQuery || raw.searchQuery || '').trim();
-    const se = {
-        styleLabel: String(raw.styleLabel || '').trim(),
-        traditionOrScene: String(raw.traditionOrScene || '').trim(),
-        whyThisFits: String(raw.whyThisFits || '').trim(),
-        exploreSearchQuery: q,
+    const ix = {
+        siteName: String(step1Ix?.siteName || '').trim(),
+        experienceName: String(step1Ix?.experienceName || '').trim(),
         reason: String(step2Reason || '').trim(),
-        matchScore: Number.isFinite(sc) ? sc : null,
-        exploreUrl: ''
+        url: String(step1Ix?.url || '').trim(),
+        instruction: String(step1Ix?.instruction || '').trim(),
+        matchScore: Number.isFinite(sc) ? sc : null
     };
-    if (q) se.exploreUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
-    return se;
+    if (ix.url && urlPassesInteractiveAllowlist(ix.url)) {
+        try {
+            ix.url = canonicalizeInteractiveUrlString(ix.url);
+        } catch {
+            /* keep */
+        }
+    }
+    return ix;
 }
 
 function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCanonical) {
@@ -514,8 +509,8 @@ function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCano
         `https://open.spotify.com/search/${encodeURIComponent(`${artistName} ${songTitle}`)}`;
     const listenQ = `${artistName} ${songTitle}`.trim();
     const mScore = Number(step2.musicMatchScore);
-    const a1s = Number(step2.art1MatchScore);
-    const ss = Number(step2.styleExploreMatchScore);
+    const phs = Number(step2.philosophyMatchScore);
+    const ixs = Number(step2.interactiveMatchScore);
     const rec = {
         primaryEmotion: step1.primaryEmotion || '',
         artist: {
@@ -530,17 +525,16 @@ function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCano
             songSoundcloudUrl: `https://soundcloud.com/search/sounds?q=${encodeURIComponent(listenQ)}`,
             albumCover: track.album?.images?.[0]?.url || null
         },
-        art1: packArtSlot(step1.art1, step2.art1Reason, a1s),
-        styleExplore: packStyleExplore(step1.styleExplore, step2.styleExploreReason, ss),
+        philosophy: packPhilosophy(step1.philosophy, step2.philosophyReason, phs),
+        interactive: packInteractive(step1.interactive, step2.interactiveReason, ixs),
         searchTrails: Array.isArray(step1.searchTrails) ? step1.searchTrails : [],
         searchUrls: []
     };
-    let trails = rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean);
-    while (trails.length < 3) trails.push('underground rap journal scene depth');
-    rec.searchTrails = trails.slice(0, 3);
-    rec.searchUrls = rec.searchTrails.map(
-        (t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`
-    );
+    const trails = rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 3);
+    rec.searchTrails = trails;
+    rec.searchUrls = trails.length
+        ? trails.map((t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`)
+        : [];
     return normalizeRecommendationUrls(rec);
 }
 
@@ -1077,6 +1071,52 @@ const initApp = async () => {
                   </div>`
                 : '';
 
+            if (it.kind === 'philosophy') {
+                const ph = snap;
+                const title = escapeHtml(String(ph.name || '—'));
+                const def = escapeHtml(truncSnippet(String(ph.definition || ''), 200));
+                const reason = escapeHtml(truncSnippet(String(ph.reason || ''), 400));
+                const ex = String(ph.exploreUrl || '').trim();
+                const exploreLink = ex
+                    ? `<p class="favorites-links"><a href="${escapeHtml(ex)}" target="_blank" rel="noopener noreferrer">Explore</a></p>`
+                    : '';
+                return `<article class="favorites-entry favorites-entry--philosophy">
+                    ${metaBlock}
+                    <div class="favorites-entry-top">
+                        <span class="favorites-entry-kind">Design philosophy</span>
+                        <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <h4 class="favorites-primary-line">${title}</h4>
+                    ${def ? `<p class="favorites-entry-note">${def}</p>` : ''}
+                    ${reason ? `<p class="favorites-entry-note">${reason}</p>` : ''}
+                    ${exploreLink}
+                </article>`;
+            }
+
+            if (it.kind === 'interactive') {
+                const ix = snap;
+                const site = String(ix.siteName || '').trim();
+                const exp = String(ix.experienceName || '').trim();
+                const head = escapeHtml([site, exp].filter(Boolean).join(' — ') || 'Interactive');
+                const reason = escapeHtml(truncSnippet(String(ix.reason || ''), 400));
+                const inst = escapeHtml(truncSnippet(String(ix.instruction || ''), 160));
+                const url = String(ix.url || '').trim();
+                const openLink = url
+                    ? `<p class="favorites-links"><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open it</a></p>`
+                    : '';
+                return `<article class="favorites-entry favorites-entry--interactive">
+                    ${metaBlock}
+                    <div class="favorites-entry-top">
+                        <span class="favorites-entry-kind">Interactive</span>
+                        <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <h4 class="favorites-primary-line">${head}</h4>
+                    ${reason ? `<p class="favorites-entry-note">${reason}</p>` : ''}
+                    ${inst ? `<p class="favorites-entry-note">${inst}</p>` : ''}
+                    ${openLink}
+                </article>`;
+            }
+
             if (it.kind === 'artist') {
                 const song = escapeHtml(String(snap.song || '—'));
                 const artist = escapeHtml(String(snap.name || ''));
@@ -1173,7 +1213,7 @@ const initApp = async () => {
                     return;
                 }
                 let html =
-                    '<p class="favorites-doc-intro">Saved by <strong>mood</strong> — each card shows what you wrote that session and what you saved (music with streaming links, one art link, or a style to explore).</p><div class="favorites-doc">';
+                    '<p class="favorites-doc-intro">Saved by <strong>mood</strong> — each card shows what you wrote that session and what you saved (music, design philosophy, or interactive experience).</p><div class="favorites-doc">';
                 for (const mood of moods) {
                     html += `<h3 class="favorites-mood-heading">${escapeHtml(mood)}</h3>`;
                     for (const it of byMood.get(mood)) {
@@ -1229,8 +1269,8 @@ const initApp = async () => {
             selected: [],
             rec: null,
             historyArtist: [],
-            historyArt1: [],
-            historyStyle: []
+            historyPhilosophy: [],
+            historyInteractive: []
         };
 
         function openVibePanel() {
@@ -1256,8 +1296,8 @@ const initApp = async () => {
             if (!r || typeof r !== 'object') return;
             let snapshot = null;
             if (kind === 'artist') snapshot = r.artist ? JSON.parse(JSON.stringify(r.artist)) : null;
-            else if (kind === 'art1') snapshot = r.art1 ? JSON.parse(JSON.stringify(r.art1)) : null;
-            else if (kind === 'style') snapshot = r.styleExplore ? JSON.parse(JSON.stringify(r.styleExplore)) : null;
+            else if (kind === 'philosophy') snapshot = r.philosophy ? JSON.parse(JSON.stringify(r.philosophy)) : null;
+            else if (kind === 'interactive') snapshot = r.interactive ? JSON.parse(JSON.stringify(r.interactive)) : null;
             if (!snapshot) return;
             const mood = String(vibeState.primaryEmotion || '').trim() || 'Uncategorized';
             try {
@@ -1294,22 +1334,9 @@ const initApp = async () => {
                 const t = String(s ?? '');
                 return t.length <= maxReasonChars ? t : `${t.slice(0, maxReasonChars)}…`;
             };
-            const pack = (art) =>
-                art && typeof art === 'object'
-                    ? {
-                          label: art.label || art.name,
-                          name: art.name,
-                          type: art.type,
-                          medium: art.medium,
-                          workTitle: art.workTitle,
-                          creatorName: art.creatorName,
-                          reason: cut(art.reason),
-                          findUrl: art.findUrl,
-                          youtubeSearchQuery: art.youtubeSearchQuery,
-                          matchScore: art.matchScore
-                      }
-                    : art;
             const a = rec.artist;
+            const ph = rec.philosophy;
+            const ix = rec.interactive;
             return JSON.stringify({
                 artist: a
                     ? {
@@ -1325,15 +1352,23 @@ const initApp = async () => {
                           curatorArtistPick: a.curatorArtistPick
                       }
                     : undefined,
-                art1: pack(rec.art1),
-                styleExplore: rec.styleExplore
+                philosophy: ph
                     ? {
-                          styleLabel: rec.styleExplore.styleLabel,
-                          traditionOrScene: rec.styleExplore.traditionOrScene,
-                          whyThisFits: cut(rec.styleExplore.whyThisFits),
-                          exploreSearchQuery: rec.styleExplore.exploreSearchQuery,
-                          reason: cut(rec.styleExplore.reason),
-                          matchScore: rec.styleExplore.matchScore
+                          name: ph.name,
+                          definition: ph.definition,
+                          reason: cut(ph.reason),
+                          exploreUrl: ph.exploreUrl,
+                          matchScore: ph.matchScore
+                      }
+                    : undefined,
+                interactive: ix
+                    ? {
+                          siteName: ix.siteName,
+                          experienceName: ix.experienceName,
+                          reason: cut(ix.reason),
+                          url: ix.url,
+                          instruction: ix.instruction,
+                          matchScore: ix.matchScore
                       }
                     : undefined,
                 searchTrails: rec.searchTrails,
@@ -1367,24 +1402,34 @@ ${entryText}
             if (!step1 || typeof step1 !== 'object') throw new Error('Invalid step-1 model response.');
             const canon = resolveCuratorArtistPick(step1.curatorArtistPick);
             const mood = String(step1.spotifyMoodKeywords ?? '').trim();
-            if (!String(step1.art1?.workTitle || '').trim()) {
-                throw new Error('Art needs a specific workTitle (named piece). Try again.');
+            const phRaw = step1.philosophy;
+            if (!phRaw || typeof phRaw !== 'object') {
+                throw new Error('philosophy is required (design philosophy card). Try again.');
             }
-            if (!String(step1.art1?.creatorName || '').trim()) {
-                throw new Error('Art needs creatorName (artist / director / author). Try again.');
+            if (!String(phRaw.name || '').trim()) {
+                throw new Error('philosophy.name is required. Try again.');
             }
-            const seRaw = step1.styleExplore;
-            if (!seRaw || typeof seRaw !== 'object') {
-                throw new Error('styleExplore is required (aesthetic / movement to match the journal). Try again.');
+            if (!String(phRaw.definition || '').trim()) {
+                throw new Error('philosophy.definition is required (one line). Try again.');
             }
-            if (!String(seRaw.styleLabel || '').trim()) {
-                throw new Error('styleExplore.styleLabel is required (named style or scene). Try again.');
+            const ixRaw = step1.interactive;
+            if (!ixRaw || typeof ixRaw !== 'object') {
+                throw new Error('interactive is required (interactive experience card). Try again.');
             }
-            const exploreQ = String(seRaw.exploreSearchQuery || seRaw.searchQuery || '').trim();
-            if (!exploreQ) {
+            if (!String(ixRaw.siteName || '').trim()) {
+                throw new Error('interactive.siteName is required. Try again.');
+            }
+            if (!String(ixRaw.experienceName || '').trim()) {
+                throw new Error('interactive.experienceName is required. Try again.');
+            }
+            const ixUrl = String(ixRaw.url || '').trim();
+            if (!ixUrl || !urlPassesInteractiveAllowlist(ixUrl)) {
                 throw new Error(
-                    'styleExplore.exploreSearchQuery is required — a journal-specific search string. Try again.'
+                    'interactive.url must be one of the five allowed sources (neal.fun, theuselessweb.com, patatap.com, itch.io tag URL, radio.garden). Try again.'
                 );
+            }
+            if (!String(ixRaw.instruction || '').trim()) {
+                throw new Error('interactive.instruction is required (what to do on the site). Try again.');
             }
 
             let { track, usedQuery, source } = await resolveTrackForCurator(step1.curatorArtistPick, mood);
@@ -1420,15 +1465,16 @@ ${entryText}
             const rec = vibeState.rec;
             if (!rec || typeof rec !== 'object') return;
 
-            const artSlotToStep1 = (slot) => ({
-                label: slot?.label,
-                type: slot?.type,
-                medium: slot?.medium,
-                workTitle: slot?.workTitle,
-                creatorName: slot?.creatorName,
-                findUrl: slot?.findUrl,
-                fallbackSearchQuery: slot?.fallbackSearchQuery,
-                youtubeSearchQuery: slot?.youtubeSearchQuery
+            const philosophySlotToStep1 = (slot) => ({
+                name: slot?.name,
+                definition: slot?.definition,
+                exploreUrl: slot?.exploreUrl
+            });
+            const interactiveSlotToStep1 = (slot) => ({
+                siteName: slot?.siteName,
+                experienceName: slot?.experienceName,
+                url: slot?.url,
+                instruction: slot?.instruction
             });
 
             if (kind === 'artist') {
@@ -1462,13 +1508,8 @@ Pick a **different** artist from the allowed list + new mood keywords. Avoid mim
                 let { track, usedQuery, source } = await resolveTrackForCurator(newPickRaw, mood);
                 const step1Preserve = {
                     primaryEmotion: vibeState.primaryEmotion,
-                    art1: artSlotToStep1(rec.art1),
-                    styleExplore: {
-                        styleLabel: rec.styleExplore?.styleLabel,
-                        traditionOrScene: rec.styleExplore?.traditionOrScene,
-                        whyThisFits: rec.styleExplore?.whyThisFits,
-                        exploreSearchQuery: rec.styleExplore?.exploreSearchQuery
-                    },
+                    philosophy: philosophySlotToStep1(rec.philosophy),
+                    interactive: interactiveSlotToStep1(rec.interactive),
                     searchTrails: rec.searchTrails
                 };
                 let step2 = await runExplainStep(entryText, track, step1Preserve, { source, usedQuery });
@@ -1497,10 +1538,10 @@ Pick a **different** artist from the allowed list + new mood keywords. Avoid mim
                 return;
             }
 
-            if (kind === 'style') {
+            if (kind === 'interactive') {
                 const session = vibeSessionStamp();
-                const prevSlot = rec.styleExplore || {};
-                const artRef = rec.art1 || {};
+                const prevSlot = rec.interactive || {};
+                const phRef = rec.philosophy || {};
                 const userP = `SESSION: ${session}
 
 Journal:
@@ -1508,36 +1549,52 @@ Journal:
 ${entryText}
 ---
 
-Reshuffle **style to explore** only — pick a **different named** aesthetic, movement, design language, or cultural scene that still fits this entry (not a second artwork).
-Previous styleLabel: ${prevSlot.styleLabel || ''}
-Previous exploreSearchQuery: ${prevSlot.exploreSearchQuery || ''}
-Previous whyThisFits (do not repeat): ${String(prevSlot.whyThisFits || '').slice(0, 400)}
-The user's concrete art pick this session (keep conceptually separate — do not duplicate this as a "style"): ${artRef.workTitle || ''} by ${artRef.creatorName || ''}
-exploreSearchQuery must be a fresh, journal-specific Google search string.
-Avoid repeating this combined key: "${avoidName}"`;
+Based on the emotional details of this journal entry, pick ONE of these five sources: neal.fun, theuselessweb.com, patatap.com, itch.io, or radio.garden. Choose the one whose energy matches the specific feeling in the entry. Construct a valid URL using only the formats provided in the system prompt. Quote exact phrases from the entry in the reason.
 
-                const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleStyleContract()}`, {
+Pick a **different** source or URL than before when possible.
+Previous site: ${prevSlot.siteName || ''}
+Previous URL: ${prevSlot.url || ''}
+Previous experienceName: ${String(prevSlot.experienceName || '').slice(0, 200)}
+Other card is design philosophy (do not duplicate as the interactive pick): ${phRef.name || ''}
+Avoid repeating this key: "${avoidName}"`;
+
+                const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleInteractiveContract()}`, {
                     temperature: 0.88,
                     max_tokens: 1024
                 });
                 const j = parseVibeJsonFromResponse(data);
-                const q = String(j.exploreSearchQuery || '').trim();
-                rec.styleExplore = {
-                    styleLabel: String(j.styleLabel || '').trim(),
-                    traditionOrScene: String(j.traditionOrScene || '').trim(),
-                    whyThisFits: String(j.whyThisFits || '').trim(),
-                    exploreSearchQuery: q,
-                    reason: String(j.reason || '').trim(),
-                    matchScore: Number.isFinite(Number(j.styleMatchScore)) ? Number(j.styleMatchScore) : null,
-                    exploreUrl: q ? `https://www.google.com/search?q=${encodeURIComponent(q)}` : ''
+                const ix = j.interactive && typeof j.interactive === 'object' ? j.interactive : j;
+                const url = String(ix.url || '').trim();
+                if (!urlPassesInteractiveAllowlist(url)) {
+                    throw new Error('Reshuffle returned a URL outside the five allowed sources.');
+                }
+                let canonUrl = url;
+                try {
+                    canonUrl = canonicalizeInteractiveUrlString(url);
+                } catch {
+                    /* keep */
+                }
+                rec.interactive = {
+                    siteName: String(ix.siteName || '').trim(),
+                    experienceName: String(ix.experienceName || '').trim(),
+                    reason: String(ix.reason || '').trim(),
+                    url: canonUrl,
+                    instruction: String(ix.instruction || '').trim(),
+                    matchScore: Number.isFinite(Number(j.interactiveMatchScore))
+                        ? Number(j.interactiveMatchScore)
+                        : Number.isFinite(Number(ix.interactiveMatchScore))
+                          ? Number(ix.interactiveMatchScore)
+                          : null
                 };
                 vibeState.rec = normalizeRecommendationUrls(rec);
                 return;
             }
 
+            if (kind !== 'philosophy') return;
+
             const session = vibeSessionStamp();
-            const other = rec.styleExplore || {};
-            const prevSlot = rec.art1 || {};
+            const other = rec.interactive || {};
+            const prevSlot = rec.philosophy || {};
             const userP = `SESSION: ${session}
 
 Journal:
@@ -1545,35 +1602,33 @@ Journal:
 ${entryText}
 ---
 
-Reshuffle **art1** only — name a **different specific** work + creator + medium (interactive web, short film, writing, sculpture, installation, etc.).
-Previous workTitle: ${prevSlot?.workTitle || ''}
-Previous creatorName: ${prevSlot?.creatorName || ''}
-Other slot is **style to explore** (stay different in kind from this art): ${other?.styleLabel || ''} — ${other?.exploreSearchQuery || ''}
+Based on the emotional details of this journal entry, select ONE design philosophy from your knowledge that captures the specific texture of what the user wrote — not the general theme but the precise feeling. Quote exact phrases from the entry in your reason.
+
+Pick a **different** philosophy name than before.
+Previous philosophy: ${prevSlot.name || ''}
+Previous definition: ${String(prevSlot.definition || '').slice(0, 200)}
+Other card is interactive (stay separate): ${other.siteName || ''} — ${other.experienceName || ''}
 Avoid repeating: "${avoidName}"`;
 
-            const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleArtContract()}`, {
+            const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshufflePhilosophyContract()}`, {
                 temperature: 0.88,
                 max_tokens: 1024
             });
             const j = parseVibeJsonFromResponse(data);
-            const lbl = String(j.label || 'Art').trim();
-            const patch = {
-                label: lbl,
-                name: lbl,
-                type: String(j.type || '').trim(),
-                medium: String(j.medium || '').trim(),
-                workTitle: String(j.workTitle || '').trim(),
-                creatorName: String(j.creatorName || '').trim(),
-                findUrl: String(j.findUrl || '').trim(),
-                fallbackSearchQuery: String(j.fallbackSearchQuery || '').trim(),
-                youtubeSearchQuery: String(j.youtubeSearchQuery || '').trim(),
-                reason: String(j.reason || '').trim(),
-                matchScore: Number.isFinite(Number(j.artMatchScore)) ? Number(j.artMatchScore) : null
+            const ph = j.philosophy && typeof j.philosophy === 'object' ? j.philosophy : j;
+            const merged = {
+                name: String(ph.name || '').trim(),
+                definition: String(ph.definition || '').trim(),
+                reason: String(ph.reason || '').trim(),
+                exploreUrl: String(ph.exploreUrl || '').trim(),
+                matchScore: Number.isFinite(Number(j.philosophyMatchScore))
+                    ? Number(j.philosophyMatchScore)
+                    : Number.isFinite(Number(ph.philosophyMatchScore))
+                      ? Number(ph.philosophyMatchScore)
+                      : null
             };
-            patch.youtubeSearchQuery =
-                buildArtSpecificSearchQuery(patch) || patch.youtubeSearchQuery;
-            coerceArtFindUrl(patch);
-            rec.art1 = { ...rec.art1, ...patch };
+            coercePhilosophyExploreUrl(merged);
+            rec.philosophy = { ...rec.philosophy, ...merged };
             vibeState.rec = normalizeRecommendationUrls(rec);
         }
 
@@ -1584,8 +1639,8 @@ Avoid repeating: "${avoidName}"`;
         function renderResultsStep() {
             const r = vibeState.rec || {};
             const a = r.artist || {};
-            const art1 = r.art1 || {};
-            const st = r.styleExplore || {};
+            const ph = r.philosophy || {};
+            const ix = r.interactive || {};
             const trails = Array.isArray(r.searchTrails) ? r.searchTrails : [];
             const urls = Array.isArray(r.searchUrls) ? r.searchUrls : [];
             const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
@@ -1595,18 +1650,28 @@ Avoid repeating: "${avoidName}"`;
                 a.matchScore != null && a.matchScore !== ''
                     ? `<p class="vibe-match-score">Match <strong>${escapeHtml(String(a.matchScore))}</strong>/10</p>`
                     : '';
-            const artScore = (s) =>
+            const slotScore = (s) =>
                 s != null && s !== ''
                     ? `<p class="vibe-match-score vibe-match-score--small">${escapeHtml(String(s))}/10</p>`
                     : '';
-            const art1WorkLine = [art1.workTitle, art1.creatorName].filter(Boolean).join(' — ');
-            const trailsHtml = [0, 1, 2]
-                .map((i) => {
-                    const t = trails[i] || '—';
-                    const u = urls[i] || `https://www.google.com/search?q=${encodeURIComponent(t)}`;
-                    return `<li class="vibe-trail-item"><a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t)}</a></li>`;
-                })
-                .join('');
+            const srcTag = interactiveSourceLabelFromUrl(ix.url || '');
+            const trailsHtml = trails.length
+                ? trails
+                      .map((t, i) => {
+                          const u = urls[i] || `https://www.google.com/search?q=${encodeURIComponent(t)}`;
+                          return `<li class="vibe-trail-item"><a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t)}</a></li>`;
+                      })
+                      .join('')
+                : '';
+            const trailsBlock =
+                trails.length > 0
+                    ? `<div class="vibe-search-trails-block">
+                    <p class="vibe-search-trails-label">Search trails</p>
+                    <ul class="vibe-search-trails-list">${trailsHtml}</ul>
+                </div>`
+                    : '';
+            const exploreUrl = String(ph.exploreUrl || '').trim();
+            const ixUrl = String(ix.url || '').trim();
             setVibeStage(`
                 ${emo}
                 <div class="vibe-results-stack">
@@ -1626,52 +1691,46 @@ Avoid repeating: "${avoidName}"`;
                             </div>
                         </div>
                     </div>
-                    <div class="vibe-rec-card" data-card="art1">
-                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art1" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
-                        <button type="button" class="vibe-reshuffle" data-reshuffle="art1" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-art1-inner">
-                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.medium || art1.type || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(art1.label || art1.name || '—')}</p>
-                            ${art1WorkLine ? `<p class="vibe-art-works-line">${escapeHtml(art1WorkLine)}</p>` : ''}
-                            ${artScore(art1.matchScore)}
-                            <p class="vibe-card-body">${escapeHtml(art1.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">Open link</button>
+                    <div class="vibe-rec-card vibe-rec-card--philosophy" data-card="philosophy">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="philosophy" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="philosophy" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-philosophy-inner">
+                            <p class="vibe-card-kicker">Design philosophy</p>
+                            <p class="vibe-card-title vibe-philosophy-name">${escapeHtml(ph.name || '—')}</p>
+                            <p class="vibe-philosophy-definition">${escapeHtml(ph.definition || '')}</p>
+                            ${slotScore(ph.matchScore)}
+                            <p class="vibe-card-body">${escapeHtml(ph.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="philosophy">Explore</button>
                         </div>
                     </div>
-                    <div class="vibe-rec-card vibe-rec-card--style" data-card="style">
-                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="style" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
-                        <button type="button" class="vibe-reshuffle" data-reshuffle="style" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-style-inner">
-                            <p class="vibe-card-kicker">Style to explore <span class="vibe-type-tag">${escapeHtml(st.traditionOrScene || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(st.styleLabel || '—')}</p>
-                            ${artScore(st.matchScore)}
-                            <p class="vibe-card-body">${escapeHtml(st.whyThisFits || '')}</p>
-                            ${st.reason ? `<p class="vibe-card-body vibe-card-body--friend">${escapeHtml(st.reason)}</p>` : ''}
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="style">Search &amp; explore</button>
+                    <div class="vibe-rec-card vibe-rec-card--interactive" data-card="interactive">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="interactive" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="interactive" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-interactive-inner">
+                            <p class="vibe-card-kicker">Interactive <span class="vibe-type-tag">${escapeHtml(srcTag)}</span></p>
+                            <p class="vibe-card-title">${escapeHtml([ix.siteName, ix.experienceName].filter(Boolean).join(' — ') || '—')}</p>
+                            ${slotScore(ix.matchScore)}
+                            <p class="vibe-card-body">${escapeHtml(ix.reason || '')}</p>
+                            <p class="vibe-interactive-instruction">${escapeHtml(ix.instruction || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="interactive">Open it</button>
                         </div>
                     </div>
                 </div>
-                <div class="vibe-search-trails-block">
-                    <p class="vibe-search-trails-label">Search trails</p>
-                    <ul class="vibe-search-trails-list">${trailsHtml}</ul>
-                </div>
+                ${trailsBlock}
                 <p class="vibe-error hidden" id="vibe-step2-err"></p>`);
 
-            const art1Url = art1.findUrl || '';
-            const styleExploreUrl = st.exploreUrl || '';
-
-            vibeStage.querySelector('[data-vibe-link="art1"]')?.addEventListener('click', () => {
-                if (art1Url) window.open(art1Url, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="philosophy"]')?.addEventListener('click', () => {
+                if (exploreUrl) window.open(exploreUrl, '_blank', 'noopener,noreferrer');
             });
-            vibeStage.querySelector('[data-vibe-link="style"]')?.addEventListener('click', () => {
-                if (styleExploreUrl) window.open(styleExploreUrl, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="interactive"]')?.addEventListener('click', () => {
+                if (ixUrl) window.open(ixUrl, '_blank', 'noopener,noreferrer');
             });
 
             vibeStage.querySelectorAll('[data-vibe-favorite]').forEach((btn) => {
                 btn.addEventListener('click', (ev) => {
                     ev.stopPropagation();
                     const k = btn.getAttribute('data-vibe-favorite');
-                    if (k === 'artist' || k === 'art1' || k === 'style') void saveFavoriteFromVibe(k);
+                    if (k === 'artist' || k === 'philosophy' || k === 'interactive') void saveFavoriteFromVibe(k);
                 });
             });
 
@@ -1680,12 +1739,12 @@ Avoid repeating: "${avoidName}"`;
                     const ar = vibeState.rec?.artist;
                     return `${String(ar?.name || '')}|${String(ar?.song || '')}`;
                 }
-                if (k === 'art1') {
-                    const x = vibeState.rec?.art1;
-                    return String(x?.youtubeSearchQuery || x?.label || x?.name || '');
+                if (k === 'philosophy') {
+                    const x = vibeState.rec?.philosophy;
+                    return String(x?.name || '').toLowerCase();
                 }
-                const x = vibeState.rec?.styleExplore;
-                return `${String(x?.styleLabel || '')}|${String(x?.exploreSearchQuery || '')}`;
+                const x = vibeState.rec?.interactive;
+                return String(x?.url || '');
             };
 
             vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
@@ -1703,9 +1762,9 @@ Avoid repeating: "${avoidName}"`;
                         const hist =
                             kind === 'artist'
                                 ? vibeState.historyArtist
-                                : kind === 'art1'
-                                  ? vibeState.historyArt1
-                                  : vibeState.historyStyle;
+                                : kind === 'philosophy'
+                                  ? vibeState.historyPhilosophy
+                                  : vibeState.historyInteractive;
                         if (hist.includes(nextName) || nextName === prevName) {
                             if (errEl) {
                                 errEl.textContent = 'Got a duplicate suggestion — try reshuffle again.';
@@ -1713,8 +1772,8 @@ Avoid repeating: "${avoidName}"`;
                             }
                         } else {
                             if (kind === 'artist') vibeState.historyArtist.push(nextName);
-                            else if (kind === 'art1') vibeState.historyArt1.push(nextName);
-                            else vibeState.historyStyle.push(nextName);
+                            else if (kind === 'philosophy') vibeState.historyPhilosophy.push(nextName);
+                            else vibeState.historyInteractive.push(nextName);
                         }
                         renderResultsStep();
                     } catch (e) {
@@ -1923,8 +1982,8 @@ Avoid repeating: "${avoidName}"`;
             vibeState.selected = [];
             vibeState.rec = null;
             vibeState.historyArtist = [];
-            vibeState.historyArt1 = [];
-            vibeState.historyStyle = [];
+            vibeState.historyPhilosophy = [];
+            vibeState.historyInteractive = [];
             openVibePanel();
             const slimeServersMsg =
                 'SlimeServers are still connecting... wait 1 more second for me 5';
@@ -1975,25 +2034,16 @@ Avoid repeating: "${avoidName}"`;
                 vibeState.primaryEmotion = full.primaryEmotion || '';
                 vibeState.rec = {
                     artist: full.artist,
-                    art1: full.art1,
-                    styleExplore: full.styleExplore,
+                    philosophy: full.philosophy,
+                    interactive: full.interactive,
                     searchTrails: full.searchTrails,
                     searchUrls: full.searchUrls
                 };
                 vibeState.historyArtist = [
                     `${String(vibeState.rec?.artist?.name || '')}|${String(vibeState.rec?.artist?.song || '')}`
                 ];
-                vibeState.historyArt1 = [
-                    String(
-                        vibeState.rec?.art1?.youtubeSearchQuery ||
-                            vibeState.rec?.art1?.label ||
-                            vibeState.rec?.art1?.name ||
-                            ''
-                    )
-                ];
-                vibeState.historyStyle = [
-                    `${String(vibeState.rec?.styleExplore?.styleLabel || '')}|${String(vibeState.rec?.styleExplore?.exploreSearchQuery || '')}`
-                ];
+                vibeState.historyPhilosophy = [String(vibeState.rec?.philosophy?.name || '').toLowerCase()];
+                vibeState.historyInteractive = [String(vibeState.rec?.interactive?.url || '')];
                 renderResultsStep();
             } catch (e) {
                 setVibeStage(
