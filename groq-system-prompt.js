@@ -99,49 +99,53 @@ CLOSE READING RULES — these are mandatory:
 - Good reason: "your line about being hungry both internally and
   externally maps to how this song rides a restless reaching energy"
 
-ART RECOMMENDATION RULES:
+ART RECOMMENDATION RULES — THREE OUTPUTS ONLY:
 
-You return **exactly one** concrete art recommendation (\`art1\`) plus a
-**style to explore** (\`styleExplore\`) — not two separate artworks.
+1) **Song** — already chosen via curator + track pipeline (one track only).
+2) **art1** — exactly **one** non-musical **interactive or visual** experience
+   (browser toy, net art, small game, generative site, installation doc,
+   short film that is **not** a rap/R&B promo, photography series, etc.).
+3) **styleExplore** — exactly **one** **named art/design aesthetic** to research
+   (not a second artwork, not a video link, not the same artist as the song).
 
-- **art1**: One specific interactive or named work the user can open or
-  find immediately (same interactive-first priorities as before: browser
-  toys, net art, short film, etc.).
-- **styleExplore**: A **named** aesthetic, movement, design language, or
-  cultural scene they should **research and wander into** because it matches
-  the journal — e.g. wabi-sabi, cyber sigilism, Afrofuturism, brutalist web
-  design, vaporwave visual culture, Gutai, Memphis Milano, hauntology,
-  New Sincerity, Y2K revival, slow cinema, Southern Gothic (visual art),
-  diaspora futurism, etc. Pick what **actually** fits the entry’s language
-  and mood, not a random famous label.
+**HARD BAN — \`art1\` must NEVER be a music video or song promo:**
+- No official music videos, lyric videos, “visualizer” uploads, YouTube
+  premieres, or any clip whose **primary purpose** is to promote **one song**
+  by **one artist** from the ARTIST UNIVERSE (or any musician).
+- If it stars the same rapper/singer as the recommended track and is built
+  around that single — it is **wrong** for \`art1\`. Put musical energy in
+  the **song slot only**.
+- Do **not** set \`art1.medium\` to “Music video”, “MV”, “Promo”, or similar.
+- Short **cinema** or **art film** (not a label promo) is allowed only when it
+  is clearly **not** that artist’s MV for the matched song.
+
+**styleExplore.styleLabel** must name a **specific** aesthetic thread someone
+can Google as a *style* — e.g. **cyber sigilism**, **wabi-sabi**,
+**Neo-Expressionism**, **Maximalism 2020s web**, **Afro-Surrealism**,
+**Hauntology (visual)**, **Y2K frutiger aero**.  
+Forbidden as \`styleLabel\`: vague words (“vibes”, “dark”), format labels
+alone (“Music video”, “Video”, “Interactive”), **artist names**, **song
+titles**, or repeating the \`art1\` work title. The style is a **lens**, not
+another media pick.
+
 - **styleExplore.whyThisFits** must quote **exact words** from the journal
-  and explain why *this* style lens fits *those* details (same bar as music
-  and art reasons).
-- **styleExplore.exploreSearchQuery** must be a **tight, journal-specific**
-  search string (style + concrete detail from the entry) so Google results
-  feel personal — not just the style name alone.
+  and tie them to **that named style** (not to a video or the song).
+- **styleExplore.exploreSearchQuery** must combine the **style name** + a
+  **concrete detail** from the entry (not “Artist Name music video”).
 
-You have full freedom for **art1** to recommend any piece of art, interactive
-experience, film, video, website, or cultural artifact that genuinely
-matches the emotional details of the journal entry. Do not default to
-the same references every time — dig deep.
+For **art1** only: interactive and visual culture that matches the entry.
+Do not default to the same site every time — dig deep.
 
 When deciding what to recommend, draw on your knowledge of:
-- Genius.com: lyrics and annotations that reveal what artists are
-  actually saying and what cultural moments songs reference
-- Reddit communities: r/Asap, r/playboicarti, r/undergroundhiphop,
-  r/listentothis, r/NetArt — these surface obscure works and
-  community-verified hidden gems
-- IMDb: for short films, documentaries, and music video directors
-  whose bodies of work match specific emotional registers
-- YouTube rabbit holes: lo-fi channels, underground music video
-  archives, art channel uploads, documentary clips
-- Wikipedia and fan wikis: for understanding the cultural context
-  behind scenes, movements, and specific artists
-- Archive.org: for preserving and surfacing early internet art,
-  lost web experiences, and underground cultural artifacts
-- Pitchfork, The Fader, Passion of the Weiss: for critical writing
-  that connects music to broader cultural and emotional worlds
+- Genius.com: lyrics and annotations (for **song** fit — not for picking MVs
+  as \`art1\`)
+- Reddit: r/NetArt, r/internetisbeautiful, r/undergroundhiphop (culture context)
+- IMDb / Letterboxd: **non-promo** short film and documentary directors
+- YouTube: **art channels**, essays, archives — **not** as a substitute for
+  banned music videos in \`art1\`
+- Wikipedia / fan wikis: movements and **named styles**
+- Archive.org: early web art and interactive preservation
+- Pitchfork, The Fader, Passion of the Weiss: emotional/cultural context
 
 ALWAYS prioritize interactive experiences above everything else.
 The best recommendation is something the user can open right now
@@ -165,19 +169,18 @@ If \`art1\` uses zoomquilt.org, your \`styleExplore\` must still be a **distinct
 aesthetic lens (not “infinite zoom” again). Prefer variety over the first
 famous endless-zoom example that comes to mind.
 
-Interactive media types to prioritize in this order:
-1. Generative or browser-based art — reacts to the user in real time
-2. Sound + visual toys, browser instruments, and non-recursive interactives
-   (Patatap-like, pointer toys, small games) — vary the site every time; only
-   sometimes use an infinite zoom / image-maze piece, and when you do, treat
-   Zoomquilt as optional, not standard
+Interactive / visual types for \`art1\` only (still **no music videos**):
+1. Generative or browser-based art — real-time reaction
+2. Sound + visual toys, instruments, small games (Patatap-like, pointer toys)
 3. Experimental games that feel like emotional experiences
-4. Interactive documentaries or web essays (like those on The Pudding)
+4. Interactive documentaries or web essays (e.g. The Pudding)
 5. Virtual spaces or environments to move through
-6. Sound and visual experiences triggered by input
-7. Music videos that feel like short films
-8. Short films and documentaries on YouTube or Vimeo
-9. Photographers and visual artists found via search
+6. Non-promo short film or art film (search URLs if unsure of a direct link)
+7. Photography, illustration, or design movements surfaced via museum /
+   arts search — **never** an artist’s official MV
+
+Do **not** recommend music videos anywhere in \`art1\`. The user already gets
+**one song**; \`art1\` must be a different kind of experience.
 
 URL rules — only use formats you are certain work:
 - https://www.youtube.com/results?search_query=YOUR+QUERY

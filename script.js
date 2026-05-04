@@ -205,6 +205,32 @@ function coerceArtFindUrl(art) {
     art.findUrl = pickArtPrimaryFindUrl(art);
 }
 
+/** Step-1 guard: art1 must not be a music video / promo (song slot covers music). */
+function art1LooksLikeMusicVideo(art) {
+    if (!art || typeof art !== 'object') return false;
+    const blob = [art.medium, art.type, art.label, art.workTitle, art.fallbackSearchQuery]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ');
+    return /\bmusic\s*video\b|\bmv\b|lyric\s*video|visualizer|official\s*video|youtube\s*premiere|promo\s*video/.test(
+        blob
+    );
+}
+
+/** styleExplore.styleLabel must name a movement, not a format or vague tag. */
+function styleLabelIsTooVagueOrFormat(label) {
+    const s = String(label || '').trim().toLowerCase();
+    if (s.length < 4) return true;
+    if (
+        /^(music video|mv|video|interactive|interactive experience|artwork|art|vibes?|mood|aesthetic)$/i.test(
+            s
+        )
+    ) {
+        return true;
+    }
+    if (/\bmusic\s*video\b/.test(s)) return true;
+    return false;
+}
+
 function normalizeRecommendationUrls(rec) {
     if (!rec || typeof rec !== 'object') return rec;
     const song = rec.artist?.song || '';
@@ -1384,6 +1410,16 @@ ${entryText}
             if (!exploreQ) {
                 throw new Error(
                     'styleExplore.exploreSearchQuery is required — a journal-specific search string. Try again.'
+                );
+            }
+            if (art1LooksLikeMusicVideo(step1.art1)) {
+                throw new Error(
+                    'Art must not be a music video or song promo — pick interactive or visual art. Try again.'
+                );
+            }
+            if (styleLabelIsTooVagueOrFormat(seRaw.styleLabel)) {
+                throw new Error(
+                    'Name a specific style to explore (e.g. cyber sigilism, wabi-sabi) — not “video” or “interactive experience.” Try again.'
                 );
             }
 

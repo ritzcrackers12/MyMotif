@@ -63,8 +63,8 @@ export function buildVibeStep1OutputContract() {
 
 Rules:
 - \`curatorArtistPick\` must match **exactly** one artist name from the ARTIST UNIVERSE in the system prompt (exact spelling).
-- \`art1\`: exactly **one** concrete interactive or named work (same rules as before). No second art slot.
-- \`styleExplore.styleLabel\`: a **named** aesthetic, movement, or cultural lens (e.g. wabi-sabi, cyber sigilism, Afrofuturism, Memphis Group, New Sincerity, brutalism in web design). Not a generic word like "sad" — a real style or scene someone can research.
+- \`art1\`: exactly **one** interactive or visual work — **never** a music video, lyric video, official promo, or visualizer for a song (song is its own output). Do not use medium/type "Music video" / "MV". Pick net art, games, sites, non-promo film, etc.
+- \`styleExplore.styleLabel\`: a **specific named** aesthetic or movement (e.g. cyber sigilism, wabi-sabi, Afro-Surrealism). **Not** an artist name, song title, "Music video", "Interactive experience", "Video", or vague words like "vibes".
 - \`styleExplore.traditionOrScene\`: one short line — where it comes from (art history, internet culture, fashion, architecture, etc.).
 - \`styleExplore.whyThisFits\`: must quote **specific phrases** from the journal and tie them to that style (mandatory close reading).
 - \`styleExplore.exploreSearchQuery\`: one **specific** Google-ready query combining the style + something concrete from the entry (so results match *this* journal, not a generic wiki page).
@@ -84,9 +84,13 @@ export function buildVibeReshuffleMusicContract() {
 }
 
 export function buildVibeReshuffleArtContract() {
-    return `OUTPUT: {"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":"","reason":"","artMatchScore":0}`;
+    return `OUTPUT: {"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":"","reason":"","artMatchScore":0}
+
+Rules: **not** a music video or song promo; interactive or visual art only.`;
 }
 
 export function buildVibeReshuffleStyleContract() {
-    return `OUTPUT: {"styleLabel":"","traditionOrScene":"","whyThisFits":"","exploreSearchQuery":"","reason":"","styleMatchScore":0}`;
+    return `OUTPUT: {"styleLabel":"","traditionOrScene":"","whyThisFits":"","exploreSearchQuery":"","reason":"","styleMatchScore":0}
+
+Rules: \`styleLabel\` = named aesthetic only (not artist/song/MV); \`exploreSearchQuery\` = style + journal detail.`;
 }
