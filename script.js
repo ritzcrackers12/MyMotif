@@ -81,11 +81,14 @@ function restoreJournalSnapshotsAfterInnerHtml() {
 function extractGeminiText(data) {
     const parts = data?.candidates?.[0]?.content?.parts;
     if (Array.isArray(parts)) {
-        return parts
+        const joined = parts
             .filter((p) => p && typeof p.text === 'string')
             .map((p) => p.text)
             .join('');
+        if (joined.trim()) return joined;
     }
+    const c0text = data?.candidates?.[0]?.content?.text;
+    if (typeof c0text === 'string' && c0text.trim()) return c0text;
     const alt = data?.content;
     if (Array.isArray(alt)) {
         return alt
@@ -349,7 +352,8 @@ const initApp = async () => {
             typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
             window.MYMOTIF_GEMINI_API_KEY.trim();
         const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
-        const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+        /** Older `-latest` IDs often 404; try in order until one accepts the key. */
+        const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
 
         const GEMINI_FETCH_TIMEOUT_MS = 75000;
 
@@ -359,43 +363,61 @@ const initApp = async () => {
             return parts.some((p) => typeof p.text === 'string' && p.text.trim().length > 0);
         }
 
+        function geminiResponseHasUsableText(data) {
+            return geminiCandidateHasText(data) || extractGeminiText(data).trim().length > 0;
+        }
+
         async function geminiGenerateContent(requestBody) {
             let lastMessage = '';
             const maxAttempts = 4;
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
-                let response;
-                try {
-                    response = await fetch(GEMINI_GENERATE_CONTENT_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody),
-                        signal: controller.signal
-                    });
-                } catch (e) {
+            for (const model of GEMINI_MODELS) {
+                const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+                for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+                    let response;
+                    try {
+                        response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(requestBody),
+                            signal: controller.signal
+                        });
+                    } catch (e) {
+                        clearTimeout(timer);
+                        lastMessage = e && e.name === 'AbortError' ? 'Request timed out.' : String(e.message || e);
+                        break;
+                    }
                     clearTimeout(timer);
-                    lastMessage = e && e.name === 'AbortError' ? 'Request timed out.' : String(e.message || e);
+                    const data = await response.json().catch(() => ({}));
+                    if (data.promptFeedback?.blockReason) {
+                        lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
+                        break;
+                    }
+                    const c0 = data.candidates?.[0];
+                    const notFound =
+                        response.status === 404 ||
+                        data.error?.status === 'NOT_FOUND' ||
+                        /not found|not supported for generateContent/i.test(data.error?.message || '');
+                    if (notFound) {
+                        lastMessage = data.error?.message || `HTTP ${response.status} (${model})`;
+                        break;
+                    }
+                    if (response.ok && c0 && geminiResponseHasUsableText(data)) return data;
+                    lastMessage =
+                        data.error?.message ||
+                        (c0?.finishReason ? `Model stopped: ${c0.finishReason}` : '') ||
+                        `HTTP ${response.status}`;
+                    const is429 =
+                        response.status === 429 ||
+                        data.error?.status === 'RESOURCE_EXHAUSTED' ||
+                        /quota|exceeded|Resource exhausted/i.test(lastMessage);
+                    if (is429 && attempt < maxAttempts - 1) {
+                        await new Promise((r) => setTimeout(r, 12000));
+                        continue;
+                    }
                     break;
                 }
-                clearTimeout(timer);
-                const data = await response.json().catch(() => ({}));
-                if (data.promptFeedback?.blockReason) {
-                    lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
-                    break;
-                }
-                const c0 = data.candidates?.[0];
-                if (response.ok && c0 && geminiCandidateHasText(data)) return data;
-                lastMessage = data.error?.message || `HTTP ${response.status}`;
-                const is429 =
-                    response.status === 429 ||
-                    data.error?.status === 'RESOURCE_EXHAUSTED' ||
-                    /quota|exceeded|Resource exhausted/i.test(lastMessage);
-                if (is429 && attempt < maxAttempts - 1) {
-                    await new Promise((r) => setTimeout(r, 12000));
-                    continue;
-                }
-                break;
             }
             throw new Error(lastMessage || 'Gemini request failed.');
         }
@@ -434,7 +456,6 @@ const initApp = async () => {
             frame: null,
             entry: '',
             primaryEmotion: '',
-            questions: [],
             selected: [],
             rec: null,
             historyArtist: [],
@@ -463,51 +484,12 @@ const initApp = async () => {
             };
         }
 
-        async function runGeminiStep1Questions(entryText) {
-            const userPrompt = `Read this journal entry and identify the primary emotion. Then generate exactly 3 follow-up questions to sharpen your understanding of the emotional and aesthetic vibe. Questions should feel visceral and instinctive, not clinical — like a friend asking, not a therapist.
-Each question has exactly 3 short answer options.
+        async function runGeminiJournalToRecommendations(entryText) {
+            const userPrompt = `Read this journal entry. Infer the primary emotional register, then recommend exactly ONE artist/song, ONE specific art work (any medium), and ONE search query to go deeper — all matching that vibe. Use the emotional scene map from your instructions.
 
 Return ONLY this JSON, nothing else:
 {
   "primaryEmotion": string,
-  "questions": [
-    { "question": string, "options": [string, string, string] }
-  ]
-}
-
-Journal entry: ${entryText}`;
-
-            const body = buildVibeGeminiBody(userPrompt, {
-                temperature: 0.9,
-                maxOutputTokens: 2048
-            });
-            const data = await geminiGenerateContent(body);
-            const parsed = parseGeminiJsonFromResponse(data);
-            return parsed;
-        }
-
-        function normalizeRecommendationUrls(rec) {
-            if (!rec || typeof rec !== 'object') return rec;
-            if (rec.artist && rec.artist.name && !String(rec.artist.searchUrl || '').includes('spotify')) {
-                rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(rec.artist.name)}`;
-            }
-            if (rec.searchQuery && rec.searchQuery.text && !String(rec.searchQuery.url || '').includes('google')) {
-                rec.searchQuery.url = `https://www.google.com/search?q=${encodeURIComponent(rec.searchQuery.text)}`;
-            }
-            return rec;
-        }
-
-        async function runGeminiStep2Recommendations(entryText, emotion, vibeAnswersText) {
-            const userPrompt = `Based on this journal entry, identified emotion, and vibe answers, give exactly ONE of each. Route using the emotional scene map.
-
-ARTIST: One specific artist or song from your taste universe that matches the emotional register of this entry. Explain in 2 sentences why THIS specific emotional world fits. Include artist name and a specific song.
-
-ART: One piece of art from ANYWHERE — a famous painting, a YouTube video, an interactive website, a SoundCloud track, a film scene, a mural, a creative director's portfolio, a music video, a documentary short. Prioritize obscure and hard-to-find. Name the SPECIFIC work. Explain in 2 sentences why this emotional world matches.
-
-SEARCH: One specific search query to find more like this.
-
-Return ONLY this JSON, nothing else:
-{
   "artist": {
     "name": string,
     "song": string | null,
@@ -530,22 +512,39 @@ For searchUrl: https://open.spotify.com/search/[encoded artist name]
 For findUrl: most specific URL possible — direct link, YouTube search, or Google search as last resort
 For searchQuery url: https://www.google.com/search?q=[encoded query]
 
-Journal entry: ${entryText}
-Identified emotion: ${emotion}
-Vibe answers: ${vibeAnswersText}`;
+Journal entry: ${entryText}`;
 
             const body = buildVibeGeminiBody(userPrompt, {
-                temperature: 0.85,
-                maxOutputTokens: 3072
+                temperature: 0.88,
+                maxOutputTokens: 4096
             });
             const data = await geminiGenerateContent(body);
-            return normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+            const parsed = normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+            if (!parsed || typeof parsed !== 'object') throw new Error('Invalid model response.');
+            if (!parsed.artist?.name || !parsed.art?.name) {
+                throw new Error('Model response missing artist or art. Try again.');
+            }
+            return parsed;
+        }
+
+        function normalizeRecommendationUrls(rec) {
+            if (!rec || typeof rec !== 'object') return rec;
+            if (rec.artist && rec.artist.name && !String(rec.artist.searchUrl || '').includes('spotify')) {
+                rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(rec.artist.name)}`;
+            }
+            if (rec.searchQuery && rec.searchQuery.text && !String(rec.searchQuery.url || '').includes('google')) {
+                rec.searchQuery.url = `https://www.google.com/search?q=${encodeURIComponent(rec.searchQuery.text)}`;
+            }
+            return rec;
         }
 
         async function runGeminiReshuffle(kind, avoidName) {
             const entryText = vibeState.entry;
             const emotion = vibeState.primaryEmotion;
-            const vibeAnswersText = JSON.stringify(vibeState.selected);
+            const vibeAnswersText =
+                vibeState.selected && vibeState.selected.filter(Boolean).length
+                    ? JSON.stringify(vibeState.selected)
+                    : '(Infer from journal and emotion only.)';
             const slot = kind === 'artist' ? 'artist / song' : kind === 'art' ? 'art piece' : 'search query';
             const currentJson = JSON.stringify(vibeState.rec);
             const userPrompt = `Give a completely different ${slot} recommendation. Do not repeat this name/title: "${avoidName}". Use the same emotional routing.
@@ -574,69 +573,6 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             }
         }
 
-        function renderQuestionsStep() {
-            const em = escapeHtml(vibeState.primaryEmotion || '');
-            let qHtml = '';
-            (vibeState.questions || []).forEach((q, qi) => {
-                const opts = (q.options || []).slice(0, 3);
-                const optBtns = opts
-                    .map(
-                        (o, oi) =>
-                            `<button type="button" class="vibe-option-btn" data-qix="${qi}" data-oix="${oi}">${escapeHtml(o)}</button>`
-                    )
-                    .join('');
-                qHtml += `<div class="vibe-q-block"><p class="vibe-q-text">${escapeHtml(q.question || '')}</p><div class="vibe-option-row">${optBtns}</div></div>`;
-            });
-            setVibeStage(`
-                <p class="vibe-emotion-label"><em>${em}</em></p>
-                ${qHtml}
-                <p class="vibe-error hidden" id="vibe-step1-err"></p>
-                <button type="button" class="primary-btn vibe-continue-btn" id="vibe-continue-btn">Continue</button>`);
-
-            vibeStage.querySelectorAll('.vibe-option-btn').forEach((btn) => {
-                btn.addEventListener('click', () => {
-                    const qi = parseInt(btn.getAttribute('data-qix'), 10);
-                    const oi = parseInt(btn.getAttribute('data-oix'), 10);
-                    if (!vibeState.selected) vibeState.selected = [];
-                    vibeState.selected[qi] = (vibeState.questions[qi].options || [])[oi] || '';
-                    btn.parentElement.querySelectorAll('.vibe-option-btn').forEach((b) => b.classList.remove('selected'));
-                    btn.classList.add('selected');
-                });
-            });
-
-            document.getElementById('vibe-continue-btn').addEventListener('click', async () => {
-                const errEl = document.getElementById('vibe-step1-err');
-                const nq = (vibeState.questions || []).length;
-                if (nq < 2 || vibeState.selected.filter(Boolean).length < nq) {
-                    errEl.textContent = 'Pick one answer for each question.';
-                    errEl.classList.remove('hidden');
-                    return;
-                }
-                errEl.classList.add('hidden');
-                const btn = document.getElementById('vibe-continue-btn');
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Finding recommendations…';
-                try {
-                    const rec = await runGeminiStep2Recommendations(
-                        vibeState.entry,
-                        vibeState.primaryEmotion,
-                        JSON.stringify(vibeState.selected)
-                    );
-                    vibeState.rec = rec;
-                    vibeState.historyArtist = [String(rec?.artist?.name || '')];
-                    vibeState.historyArt = [String(rec?.art?.name || '')];
-                    vibeState.historySearch = [String(rec?.searchQuery?.text || '')];
-                    renderResultsStep();
-                } catch (e) {
-                    errEl.textContent = e.message || String(e);
-                    errEl.classList.remove('hidden');
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = 'Continue';
-                }
-            });
-        }
-
         function cardSpinner() {
             return '<div class="vibe-card-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>';
         }
@@ -646,7 +582,9 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             const a = r.artist || {};
             const art = r.art || {};
             const sq = r.searchQuery || {};
+            const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
             setVibeStage(`
+                ${emo}
                 <div class="vibe-results-stack">
                     <div class="vibe-rec-card" data-card="artist">
                         <button type="button" class="vibe-reshuffle" data-reshuffle="artist" title="Reshuffle">🔀</button>
@@ -754,13 +692,21 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             vibeState.historyArt = [];
             vibeState.historySearch = [];
             openVibePanel();
-            setVibeStage('<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Reading your entry…</p></div>');
+            setVibeStage(
+                '<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Matching your vibe to music & art…</p></div>'
+            );
             try {
-                const step1 = await runGeminiStep1Questions(vibeState.entry);
-                vibeState.primaryEmotion = step1.primaryEmotion || '';
-                vibeState.questions = Array.isArray(step1.questions) ? step1.questions.slice(0, 3) : [];
-                if (vibeState.questions.length < 2) throw new Error('Model returned too few questions. Try again.');
-                renderQuestionsStep();
+                const full = await runGeminiJournalToRecommendations(vibeState.entry);
+                vibeState.primaryEmotion = full.primaryEmotion || '';
+                vibeState.rec = {
+                    artist: full.artist,
+                    art: full.art,
+                    searchQuery: full.searchQuery
+                };
+                vibeState.historyArtist = [String(vibeState.rec?.artist?.name || '')];
+                vibeState.historyArt = [String(vibeState.rec?.art?.name || '')];
+                vibeState.historySearch = [String(vibeState.rec?.searchQuery?.text || '')];
+                renderResultsStep();
             } catch (e) {
                 setVibeStage(
                     `<div class="vibe-error-panel"><p>${escapeHtml(e.message || String(e))}</p><button type="button" class="primary-btn" id="vibe-retry">Try again</button></div>`
@@ -769,7 +715,28 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             }
         }
 
+        function ensureJournalUiOnFrame(frameEl) {
+            if (!frameEl || !frameEl.classList.contains('motif-frame')) return;
+            const body = frameEl.querySelector('.frame-body');
+            if (!body || body.querySelector('.find-vibe-btn')) return;
+            const taOld = body.querySelector('.journal-entry-textarea');
+            const prev = taOld ? taOld.value : '';
+            body.classList.add('journal-frame-body');
+            body.innerHTML = `
+                <textarea class="journal-entry-textarea" maxlength="500" rows="6" placeholder="What's on your mind?"></textarea>
+                <div class="journal-toolbar">
+                    <span class="journal-char-count">0 / 500</span>
+                    <button type="button" class="primary-btn find-vibe-btn">you need to see ts</button>
+                </div>`;
+            const ta = body.querySelector('.journal-entry-textarea');
+            if (ta && prev) ta.value = prev.slice(0, 500);
+        }
+
+        const journalFrameUiBound = new WeakSet();
+
         function bindJournalFrame(frameEl) {
+            ensureJournalUiOnFrame(frameEl);
+            if (journalFrameUiBound.has(frameEl)) return;
             const ta = frameEl.querySelector('.journal-entry-textarea');
             const cnt = frameEl.querySelector('.journal-char-count');
             const btn = frameEl.querySelector('.find-vibe-btn');
@@ -789,6 +756,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 ev.stopPropagation();
                 void startFindMyVibe(frameEl);
             });
+            journalFrameUiBound.add(frameEl);
         }
 
         function wireAllJournalFrames() {
@@ -909,8 +877,11 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
         let lastMousedownTime = 0;
 
         boardContainer.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.top-toolbar')) return;
-            if (e.target.closest('#vibe-panel-overlay')) return;
+            const rawT = e.target;
+            const targetEl = rawT instanceof Element ? rawT : rawT && rawT.parentElement;
+            if (!(targetEl instanceof Element)) return;
+            if (targetEl.closest('.top-toolbar')) return;
+            if (targetEl.closest('#vibe-panel-overlay')) return;
 
             const rect = canvas.getBoundingClientRect();
             const pointerX = (e.clientX - rect.left) / scale;
@@ -918,7 +889,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             const now = Date.now();
             const isDoubleClick = now - lastMousedownTime < 300;
             lastMousedownTime = now;
-            const individualDragHandle = e.target.closest('.individual-drag-handle');
+            const individualDragHandle = targetEl.closest('.individual-drag-handle');
             let executeIndividualMove = (currentTool === 'pan' && isDoubleClick) || !!individualDragHandle;
 
             if ((currentTool === 'pan' && !isDoubleClick) || e.button === 1 || e.code === 'Space') {
@@ -929,7 +900,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 return;
             }
 
-            const deleteBtnEarly = e.target.closest('.delete-btn');
+            const deleteBtnEarly = targetEl.closest('.delete-btn');
             if (deleteBtnEarly) {
                 const parentEl = deleteBtnEarly.closest('.motif-frame, .motif-board');
                 if (parentEl) {
@@ -940,10 +911,11 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             }
 
             if (
-                e.target.closest('.find-vibe-btn') ||
-                e.target.closest('.journal-entry-textarea') ||
-                e.target.closest('.frame-header input') ||
-                e.target.closest('.board-header input')
+                targetEl.closest('.find-vibe-btn') ||
+                targetEl.closest('.journal-entry-textarea') ||
+                targetEl.closest('.journal-toolbar') ||
+                targetEl.closest('.frame-header input') ||
+                targetEl.closest('.board-header input')
             ) {
                 return;
             }
@@ -969,15 +941,15 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 return;
             }
 
-            const frameResizeHandle = e.target.closest('.frame-resize-handle');
-            const frameHeader = e.target.closest('.frame-header');
-            const frameBody = e.target.closest('.frame-body');
-            const frame = e.target.closest('.motif-frame');
-            const boardResizeHandle = e.target.closest('.board-resize-handle');
-            const boardHeader = e.target.closest('.board-header');
-            const board = e.target.closest('.motif-board');
+            const frameResizeHandle = targetEl.closest('.frame-resize-handle');
+            const frameHeader = targetEl.closest('.frame-header');
+            const frameBody = targetEl.closest('.frame-body');
+            const frame = targetEl.closest('.motif-frame');
+            const boardResizeHandle = targetEl.closest('.board-resize-handle');
+            const boardHeader = targetEl.closest('.board-header');
+            const board = targetEl.closest('.motif-board');
 
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.closest('.journal-entry-textarea')) {
+            if (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.closest('.journal-entry-textarea')) {
                 if (frame) selectElement(frame, 'frame');
                 if (board) selectElement(board, 'board');
                 return;
@@ -1003,7 +975,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             } else if (boardHeader) {
                 startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(board, 'board');
-            } else if (board && !e.target.closest('.motif-frame')) {
+            } else if (board && !targetEl.closest('.motif-frame')) {
                 startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(board, 'board');
             } else deselectAll();
