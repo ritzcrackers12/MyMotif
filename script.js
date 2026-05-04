@@ -20,7 +20,13 @@ import {
     deleteDoc,
     serverTimestamp
 } from './firebase.js';
-import { buildCuratorSystemPrompt, buildVibeGroqOutputContract } from './curator-prompt.js';
+import {
+    buildVibeStep1FullPrompt,
+    buildVibeStep2FullPrompt,
+    buildVibeStep2RetryFullPrompt,
+    buildVibeReshuffleMusicFullPrompt,
+    buildVibeReshuffleArtFullPrompt
+} from './curator-prompt.js';
 
 /** Prefer model watch/results URL; else YouTube search for artist + song. */
 function resolveYoutubeSongUrl(url, fallbackQuery) {
@@ -80,7 +86,13 @@ function urlPassesArtFindPolicy(url) {
     try {
         const u = new URL(url);
         const h = u.hostname.replace(/^www\./, '');
-        if (youtubeHost(h) || u.hostname === 'youtu.be') return false;
+        /* Art cards use YouTube **search results** only (no invented watch URLs). */
+        if (youtubeHost(h)) {
+            if (u.pathname.startsWith('/results')) return true;
+            if (u.searchParams.has('search_query')) return true;
+            return false;
+        }
+        if (u.hostname === 'youtu.be') return false;
         if (h === 'vimeo.com') {
             if (u.pathname.startsWith('/search')) return true;
             if (/^\/\d+(?:\/|$)/.test(u.pathname)) return true;
@@ -103,15 +115,20 @@ function urlPassesArtFindPolicy(url) {
 
 function coerceArtFindUrl(art) {
     if (!art || typeof art !== 'object') return;
-    const q = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
+    const fallbackQ = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
     let url = String(art.findUrl || '').trim();
     try {
         if (url) {
             const u = new URL(url);
             const h = u.hostname.replace(/^www\./, '');
-            if (youtubeHost(h) || u.hostname === 'youtu.be') {
-                art.findUrl = '';
-                url = '';
+            const qArt = String(art.youtubeSearchQuery || fallbackQ).trim();
+            if (youtubeHost(h) && u.pathname === '/watch') {
+                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(qArt)}`;
+                return;
+            }
+            if (u.hostname === 'youtu.be') {
+                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(qArt)}`;
+                return;
             }
         }
     } catch {
@@ -120,7 +137,8 @@ function coerceArtFindUrl(art) {
     }
     url = String(art.findUrl || '').trim();
     if (url && urlPassesArtFindPolicy(url)) return;
-    art.findUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    const q = String(art.youtubeSearchQuery || fallbackQ).trim();
+    art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
 }
 
 function normalizeRecommendationUrls(rec) {
@@ -129,7 +147,9 @@ function normalizeRecommendationUrls(rec) {
     const name = rec.artist?.name || '';
     const spotifyQ = [song, name].filter(Boolean).join(' ').trim() || name || 'music';
     if (rec.artist && typeof rec.artist === 'object') {
-        rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(spotifyQ)}`;
+        if (!String(rec.artist.searchUrl || '').trim()) {
+            rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(spotifyQ)}`;
+        }
         const ytCandidate =
             rec.artist.songYoutubeUrl ||
             (/youtube\.com\/watch|youtu\.be\//i.test(String(rec.artist.albumCover || ''))
@@ -174,6 +194,233 @@ function saveGroqApiKey(key) {
     } catch {
         return false;
     }
+}
+
+const SPOTIFY_CLIENT_ID_KEY = 'mymotif_spotify_client_id_v1';
+const SPOTIFY_CLIENT_SECRET_KEY = 'mymotif_spotify_client_secret_v1';
+
+/** Optional — improves metadata; iTunes fallback resolves real tracks without these. */
+function getSpotifyClientId() {
+    try {
+        const w =
+            typeof window !== 'undefined' &&
+            typeof window.MYMOTIF_SPOTIFY_CLIENT_ID === 'string' &&
+            window.MYMOTIF_SPOTIFY_CLIENT_ID.trim();
+        if (w) return window.MYMOTIF_SPOTIFY_CLIENT_ID.trim();
+        const s = localStorage.getItem(SPOTIFY_CLIENT_ID_KEY);
+        return s && s.trim() ? s.trim() : '';
+    } catch {
+        return '';
+    }
+}
+
+function getSpotifyClientSecret() {
+    try {
+        const w =
+            typeof window !== 'undefined' &&
+            typeof window.MYMOTIF_SPOTIFY_CLIENT_SECRET === 'string' &&
+            window.MYMOTIF_SPOTIFY_CLIENT_SECRET.trim();
+        if (w) return window.MYMOTIF_SPOTIFY_CLIENT_SECRET.trim();
+        const s = localStorage.getItem(SPOTIFY_CLIENT_SECRET_KEY);
+        return s && s.trim() ? s.trim() : '';
+    } catch {
+        return '';
+    }
+}
+
+function hasSpotifyCredentials() {
+    return !!(getSpotifyClientId() && getSpotifyClientSecret());
+}
+
+function saveSpotifyCredentials(id, secret) {
+    try {
+        localStorage.setItem(SPOTIFY_CLIENT_ID_KEY, String(id || '').trim());
+        localStorage.setItem(SPOTIFY_CLIENT_SECRET_KEY, String(secret || '').trim());
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+let spotifyTokenCache = { accessToken: '', expiresAt: 0 };
+
+async function fetchSpotifyAccessToken() {
+    const id = getSpotifyClientId();
+    const secret = getSpotifyClientSecret();
+    if (!id || !secret) throw new Error('missing_credentials');
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: 'Basic ' + btoa(`${id}:${secret}`)
+        },
+        body: new URLSearchParams({ grant_type: 'client_credentials' })
+    });
+    if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err || `Spotify auth HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (!data.access_token) throw new Error('Spotify auth: no access_token');
+    return { token: data.access_token, expiresIn: data.expires_in || 3600 };
+}
+
+async function spotifyApiSearchFirstTrack(query) {
+    let token = spotifyTokenCache.accessToken;
+    if (!token || Date.now() > spotifyTokenCache.expiresAt - 60_000) {
+        const t = await fetchSpotifyAccessToken();
+        spotifyTokenCache = {
+            accessToken: t.token,
+            expiresAt: Date.now() + t.expiresIn * 1000
+        };
+        token = t.token;
+    }
+    const res = await fetch(
+        `https://api.spotify.com/v1/search?${new URLSearchParams({
+            q: query,
+            type: 'track',
+            limit: '10'
+        })}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw new Error(`Spotify search HTTP ${res.status}`);
+    const data = await res.json();
+    const items = data.tracks?.items;
+    if (!items?.length) throw new Error('Spotify returned no tracks');
+    return items[0];
+}
+
+async function itunesSearchFirstTrack(query) {
+    const res = await fetch(
+        `https://itunes.apple.com/search?${new URLSearchParams({
+            term: query,
+            media: 'music',
+            entity: 'song',
+            limit: '10'
+        })}`
+    );
+    if (!res.ok) throw new Error(`iTunes HTTP ${res.status}`);
+    const data = await res.json();
+    const r = data.results?.[0];
+    if (!r) throw new Error('No songs found for search');
+    const art = r.artworkUrl100
+        ? r.artworkUrl100.replace(/100x100bb/g, '600x600bb')
+        : null;
+    return {
+        name: r.trackName,
+        artists: [{ name: r.artistName }],
+        album: {
+            name: r.collectionName,
+            images: art ? [{ url: art }] : []
+        },
+        external_urls: {
+            spotify: `https://open.spotify.com/search/${encodeURIComponent(`${r.artistName} ${r.trackName}`)}`
+        },
+        preview_url: r.previewUrl || null
+    };
+}
+
+/**
+ * Run Spotify search if credentials work; otherwise iTunes (real titles, no LLM).
+ */
+async function resolveTrackFromSearchQuery(spotifySearchQuery) {
+    const q = String(spotifySearchQuery || '').trim();
+    if (!q) throw new Error('Empty music search query from model.');
+    if (hasSpotifyCredentials()) {
+        try {
+            const track = await spotifyApiSearchFirstTrack(q);
+            return { track, usedQuery: q, source: 'spotify' };
+        } catch (e) {
+            console.warn('MyMotif: Spotify resolution failed, using iTunes:', e && e.message);
+        }
+    }
+    const track = await itunesSearchFirstTrack(q);
+    return { track, usedQuery: q, source: 'itunes' };
+}
+
+function buildYoutubeResultsUrl(searchQuery) {
+    const q = String(searchQuery || '').trim() || 'visual art';
+    return `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+}
+
+function buildStep2UserTask(entryText, track, step1, meta) {
+    const trackFacts = JSON.stringify(
+        {
+            name: track.name,
+            artists: (track.artists || []).map((a) => ({ name: a.name })),
+            album: track.album?.name || null,
+            preview_url: track.preview_url || null
+        },
+        null,
+        0
+    );
+    const src = meta?.source || 'api';
+    const used = meta?.usedQuery || '';
+    const extra = meta?.extraNote ? `\n${meta.extraNote}\n` : '';
+    return `${extra}Journal:
+---
+${entryText}
+---
+
+Real track returned by ${src} search (query: "${used}"):
+${trackFacts}
+
+Your step-1 YouTube search directions (results pages, not specific videos):
+- art1: type="${step1.art1?.type || ''}" youtubeSearchQuery="${step1.art1?.youtubeSearchQuery || ''}"
+- art2: type="${step1.art2?.type || ''}" youtubeSearchQuery="${step1.art2?.youtubeSearchQuery || ''}"`;
+}
+
+function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery) {
+    const artistName = track.artists?.[0]?.name || 'Unknown';
+    const songTitle = track.name || '—';
+    const spotifyOpen =
+        track.external_urls?.spotify ||
+        `https://open.spotify.com/search/${encodeURIComponent(`${artistName} ${songTitle}`)}`;
+    const listenQ = `${artistName} ${songTitle}`.trim();
+    const mScore = Number(step2.musicMatchScore);
+    const a1s = Number(step2.art1MatchScore);
+    const a2s = Number(step2.art2MatchScore);
+    const rec = {
+        primaryEmotion: step1.primaryEmotion || '',
+        artist: {
+            name: artistName,
+            song: songTitle,
+            reason: String(step2.artistReason || '').trim(),
+            matchScore: Number.isFinite(mScore) ? mScore : null,
+            searchUrl: spotifyOpen,
+            spotifySearchQuery: usedSpotifyQuery,
+            songYoutubeUrl: buildYoutubeResultsUrl(listenQ),
+            songSoundcloudUrl: `https://soundcloud.com/search/sounds?q=${encodeURIComponent(listenQ)}`,
+            albumCover: track.album?.images?.[0]?.url || null
+        },
+        art1: {
+            label: String(step1.art1?.label || 'Art').trim(),
+            name: String(step1.art1?.label || 'Art').trim(),
+            type: String(step1.art1?.type || '').trim(),
+            reason: String(step2.art1Reason || '').trim(),
+            matchScore: Number.isFinite(a1s) ? a1s : null,
+            youtubeSearchQuery: String(step1.art1?.youtubeSearchQuery || '').trim(),
+            findUrl: buildYoutubeResultsUrl(step1.art1?.youtubeSearchQuery)
+        },
+        art2: {
+            label: String(step1.art2?.label || 'More art').trim(),
+            name: String(step1.art2?.label || 'More art').trim(),
+            type: String(step1.art2?.type || '').trim(),
+            reason: String(step2.art2Reason || '').trim(),
+            matchScore: Number.isFinite(a2s) ? a2s : null,
+            youtubeSearchQuery: String(step1.art2?.youtubeSearchQuery || '').trim(),
+            findUrl: buildYoutubeResultsUrl(step1.art2?.youtubeSearchQuery)
+        },
+        searchTrails: Array.isArray(step1.searchTrails) ? step1.searchTrails : [],
+        searchUrls: []
+    };
+    let trails = rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean);
+    while (trails.length < 3) trails.push('underground rap journal scene depth');
+    rec.searchTrails = trails.slice(0, 3);
+    rec.searchUrls = rec.searchTrails.map(
+        (t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`
+    );
+    return normalizeRecommendationUrls(rec);
 }
 
 const WORKSPACE_BOARD_ID = 'default';
@@ -305,6 +552,8 @@ const initApp = async () => {
         const groqKeyCancelBtn = document.getElementById('groq-key-cancel-btn');
         const groqKeyError = document.getElementById('groq-key-error');
         const groqKeySettingsBtn = document.getElementById('groq-key-settings-btn');
+        const spotifyClientIdInput = document.getElementById('spotify-client-id-input');
+        const spotifyClientSecretInput = document.getElementById('spotify-client-secret-input');
 
         function setGroqKeyError(msg) {
             if (!groqKeyError) return;
@@ -319,7 +568,7 @@ const initApp = async () => {
 
         function syncGroqKeyToolbar() {
             if (!groqKeySettingsBtn) return;
-            groqKeySettingsBtn.style.display = auth.currentUser && getGroqApiKey() ? 'flex' : 'none';
+            groqKeySettingsBtn.style.display = auth.currentUser ? 'flex' : 'none';
         }
 
         function applyGroqOverlayState() {
@@ -354,6 +603,9 @@ const initApp = async () => {
                     setGroqKeyError('Could not save key (browser storage blocked?).');
                     return;
                 }
+                const sid = spotifyClientIdInput ? String(spotifyClientIdInput.value || '').trim() : '';
+                const sec = spotifyClientSecretInput ? String(spotifyClientSecretInput.value || '').trim() : '';
+                saveSpotifyCredentials(sid, sec);
                 groqEditOpen = false;
                 setGroqKeyError('');
                 applyGroqOverlayState();
@@ -887,11 +1139,6 @@ const initApp = async () => {
             }
         }
 
-        /** Curator + task + Groq output contract (link rules, close reading, schema hints). */
-        function buildVibeFullPrompt(userTaskText) {
-            return `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}\n\n${buildVibeGroqOutputContract()}`;
-        }
-
         /** Truncate long reasons in reshuffle payload to save input tokens. */
         function compactVibeRecForPrompt(rec, maxReasonChars = 320) {
             if (!rec || typeof rec !== 'object') return '{}';
@@ -902,10 +1149,13 @@ const initApp = async () => {
             const pack = (art) =>
                 art && typeof art === 'object'
                     ? {
+                          label: art.label || art.name,
                           name: art.name,
                           type: art.type,
                           reason: cut(art.reason),
-                          findUrl: art.findUrl
+                          findUrl: art.findUrl,
+                          youtubeSearchQuery: art.youtubeSearchQuery,
+                          matchScore: art.matchScore
                       }
                     : art;
             const a = rec.artist;
@@ -918,7 +1168,9 @@ const initApp = async () => {
                           songYoutubeUrl: a.songYoutubeUrl,
                           songSoundcloudUrl: a.songSoundcloudUrl,
                           reason: cut(a.reason),
-                          searchUrl: a.searchUrl
+                          searchUrl: a.searchUrl,
+                          matchScore: a.matchScore,
+                          spotifySearchQuery: a.spotifySearchQuery
                       }
                     : undefined,
                 art1: pack(rec.art1),
@@ -928,82 +1180,165 @@ const initApp = async () => {
             });
         }
 
+        async function runExplainStep(entryText, track, step1, meta) {
+            const step2Task = buildStep2UserTask(entryText, track, step1, meta);
+            const data2 = await groqChatCompletion(buildVibeStep2FullPrompt(step2Task), {
+                temperature: 0.72,
+                max_tokens: 2048
+            });
+            return parseVibeJsonFromResponse(data2);
+        }
+
         async function runVibeJournalToRecommendations(entryText) {
             const session = vibeSessionStamp();
-            const userPrompt = `CURATION SESSION: ${session} — This is a new run. Picks must be **justified** by the journal (not random); follow system prompt for reason format.
-
-Close-read the journal: each \`reason\` cites their specifics and explains why that suggestion fits **this** entry. For music: do not open with the song title or quote lyrics. You MUST output artist.song as a real released track (exact title) on streaming — never invent titles. Art findUrl: **no YouTube** (music video belongs in artist.songYoutubeUrl only). art2 type ≠ art1.
-
-JSON shape:
-{"primaryEmotion":"","artist":{"name":"","song":"","albumCover":null,"songYoutubeUrl":null,"songSoundcloudUrl":null,"reason":"","searchUrl":"spotify"},"art1":{"name":"","type":"","reason":"","findUrl":""},"art2":{"name":"","type":"","reason":"","findUrl":""},"searchTrails":["","",""],"searchUrls":["","",""]}
+            const step1Task = `SESSION: ${session}
 
 Journal:
 ---
 ${entryText}
 ---`;
 
-            const fullPrompt = buildVibeFullPrompt(userPrompt);
-            const data = await groqChatCompletion(fullPrompt, {
-                temperature: 0.86,
-                max_tokens: 4096
+            const data1 = await groqChatCompletion(buildVibeStep1FullPrompt(step1Task), {
+                temperature: 0.78,
+                max_tokens: 2048
             });
-            const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
-            if (!parsed || typeof parsed !== 'object') throw new Error('Invalid model response.');
-            if (!parsed.artist?.name || !parsed.art1?.name || !parsed.art2?.name) {
-                throw new Error('Model response missing artist, art1, or art2. Try again.');
+            const step1 = parseVibeJsonFromResponse(data1);
+            if (!step1 || typeof step1 !== 'object') throw new Error('Invalid step-1 model response.');
+            const sq = String(step1.spotifySearchQuery || '').trim();
+            if (!sq) throw new Error('Model returned no spotifySearchQuery.');
+            if (!step1.art1?.youtubeSearchQuery || !step1.art2?.youtubeSearchQuery) {
+                throw new Error('Model returned incomplete art search queries.');
             }
-            const songTitle = String(parsed.artist?.song || '').trim();
-            if (!songTitle) {
-                throw new Error('Model returned no specific song title. Try again.');
+
+            let { track, usedQuery, source } = await resolveTrackFromSearchQuery(sq);
+            let step2 = await runExplainStep(entryText, track, step1, { source, usedQuery });
+
+            if (Number(step2.musicMatchScore) < 6 && String(step2.refinedSpotifyQuery || '').trim()) {
+                const refined = String(step2.refinedSpotifyQuery).trim();
+                const second = await resolveTrackFromSearchQuery(refined);
+                track = second.track;
+                usedQuery = second.usedQuery;
+                source = second.source;
+                const retryTask = buildStep2UserTask(entryText, track, step1, {
+                    source,
+                    usedQuery,
+                    extraNote:
+                        'This is after ONE refined Spotify/iTunes search. In your JSON set refinedSpotifyQuery to null.'
+                });
+                const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
+                    temperature: 0.72,
+                    max_tokens: 2048
+                });
+                step2 = parseVibeJsonFromResponse(dataRetry);
             }
-            return parsed;
+
+            return buildRecFromPipeline(step1, track, step2, usedQuery);
         }
 
         async function runVibeReshuffle(kind, avoidName) {
             const entryText = vibeState.entry;
-            const emotion = vibeState.primaryEmotion;
-            const vibeAnswersText =
-                vibeState.selected && vibeState.selected.filter(Boolean).length
-                    ? JSON.stringify(vibeState.selected)
-                    : '(Infer from journal and emotion only.)';
-            const slotLabel =
-                kind === 'artist'
-                    ? 'artist (name, song, albumCover, songYoutubeUrl, songSoundcloudUrl, reason, searchUrl)'
-                    : kind === 'art1'
-                      ? 'art1 (must stay a different category than art2 after replacement)'
-                      : 'art2 (must stay a different category than art1 after replacement)';
-            const currentJson = compactVibeRecForPrompt(vibeState.rec);
-            const session = vibeSessionStamp();
-            const userPrompt = `RESHUFFLE SESSION: ${session} — Fresh alternative required (not a repeat of common defaults).
+            const rec = vibeState.rec;
+            if (!rec || typeof rec !== 'object') return;
 
-Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming). Reasons = journal specifics + why this fits (see system prompt). Art findUrl = no YouTube.
+            if (kind === 'artist') {
+                const session = vibeSessionStamp();
+                const prevQ = String(rec.artist?.spotifySearchQuery || '');
+                const userP = `SESSION: ${session}
 
-Journal: ${entryText}
-Emotion: ${emotion}
-Vibe: ${vibeAnswersText}
+Journal:
+---
+${entryText}
+---
 
-CURRENT (replace only "${kind}"; echo rest unchanged):
-${currentJson}
+Previous spotifySearchQuery (pick a clearly different angle): ${prevQ || '(none)'}
+Avoid repeating that query or mimicking: "${avoidName}"`;
 
-Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`;
+                const data = await groqChatCompletion(buildVibeReshuffleMusicFullPrompt(userP), {
+                    temperature: 0.9,
+                    max_tokens: 512
+                });
+                const j = parseVibeJsonFromResponse(data);
+                const nq = String(j.spotifySearchQuery || '').trim();
+                if (!nq) throw new Error('No new spotifySearchQuery from model.');
 
-            const fullPrompt = buildVibeFullPrompt(userPrompt);
-            const data = await groqChatCompletion(fullPrompt, {
-                temperature: 0.95,
-                max_tokens: 4096
-            });
-            const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
-            if (parsed && typeof parsed === 'object') {
-                if (parsed.primaryEmotion) vibeState.primaryEmotion = parsed.primaryEmotion;
-                vibeState.rec = {
-                    artist: parsed.artist || vibeState.rec.artist,
-                    art1: parsed.art1 || vibeState.rec.art1,
-                    art2: parsed.art2 || vibeState.rec.art2,
-                    searchTrails: parsed.searchTrails || vibeState.rec.searchTrails,
-                    searchUrls: parsed.searchUrls || vibeState.rec.searchUrls
+                let { track, usedQuery, source } = await resolveTrackFromSearchQuery(nq);
+                const step1Preserve = {
+                    primaryEmotion: vibeState.primaryEmotion,
+                    art1: {
+                        label: rec.art1?.label,
+                        type: rec.art1?.type,
+                        youtubeSearchQuery: rec.art1?.youtubeSearchQuery
+                    },
+                    art2: {
+                        label: rec.art2?.label,
+                        type: rec.art2?.type,
+                        youtubeSearchQuery: rec.art2?.youtubeSearchQuery
+                    },
+                    searchTrails: rec.searchTrails
                 };
-                normalizeRecommendationUrls(vibeState.rec);
+                let step2 = await runExplainStep(entryText, track, step1Preserve, { source, usedQuery });
+                if (Number(step2.musicMatchScore) < 6 && String(step2.refinedSpotifyQuery || '').trim()) {
+                    const refined = String(step2.refinedSpotifyQuery).trim();
+                    const second = await resolveTrackFromSearchQuery(refined);
+                    track = second.track;
+                    usedQuery = second.usedQuery;
+                    source = second.source;
+                    const retryTask = buildStep2UserTask(entryText, track, step1Preserve, {
+                        source,
+                        usedQuery,
+                        extraNote:
+                            'Refined search pass (final). Set refinedSpotifyQuery to null in your JSON output.'
+                    });
+                    const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
+                        temperature: 0.72,
+                        max_tokens: 2048
+                    });
+                    step2 = parseVibeJsonFromResponse(dataRetry);
+                }
+                vibeState.rec = buildRecFromPipeline(step1Preserve, track, step2, usedQuery);
+                return;
             }
+
+            const session = vibeSessionStamp();
+            const other = kind === 'art1' ? rec.art2 : rec.art1;
+            const prevSlot = kind === 'art1' ? rec.art1 : rec.art2;
+            const userP = `SESSION: ${session}
+
+Journal:
+---
+${entryText}
+---
+
+Reshuffle **${kind}** only.
+Previous label: ${prevSlot?.label || ''}
+Previous youtubeSearchQuery: ${prevSlot?.youtubeSearchQuery || ''}
+Other art slot query (stay different): ${other?.youtubeSearchQuery || ''}
+Avoid repeating: "${avoidName}"`;
+
+            const data = await groqChatCompletion(buildVibeReshuffleArtFullPrompt(userP), {
+                temperature: 0.88,
+                max_tokens: 1024
+            });
+            const j = parseVibeJsonFromResponse(data);
+            const yq = String(j.youtubeSearchQuery || '').trim();
+            if (!yq) throw new Error('No youtubeSearchQuery from model.');
+            const lbl = String(j.label || 'Art').trim();
+            const patch = {
+                label: lbl,
+                name: lbl,
+                type: String(j.type || '').trim(),
+                youtubeSearchQuery: yq,
+                reason: String(j.reason || '').trim(),
+                matchScore: Number.isFinite(Number(j.artMatchScore)) ? Number(j.artMatchScore) : null,
+                findUrl: buildYoutubeResultsUrl(yq)
+            };
+            coerceArtFindUrl(patch);
+            if (kind === 'art1') {
+                rec.art1 = { ...rec.art1, ...patch };
+            } else {
+                rec.art2 = { ...rec.art2, ...patch };
+            }
+            vibeState.rec = normalizeRecommendationUrls(rec);
         }
 
         function cardSpinner() {
@@ -1020,6 +1355,14 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
             const songLine = escapeHtml(a.song || '—');
             const nameMuted = escapeHtml(a.name || '');
+            const musicScore =
+                a.matchScore != null && a.matchScore !== ''
+                    ? `<p class="vibe-match-score">Match <strong>${escapeHtml(String(a.matchScore))}</strong>/10</p>`
+                    : '';
+            const artScore = (s) =>
+                s != null && s !== ''
+                    ? `<p class="vibe-match-score vibe-match-score--small">${escapeHtml(String(s))}/10</p>`
+                    : '';
             const trailsHtml = [0, 1, 2]
                 .map((i) => {
                     const t = trails[i] || '—';
@@ -1037,9 +1380,10 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                             <p class="vibe-card-kicker">Music</p>
                             <p class="vibe-artist-songline">${songLine}</p>
                             <p class="vibe-artist-nameline">${nameMuted}</p>
+                            ${musicScore}
                             <p class="vibe-card-body vibe-card-body--friend">${escapeHtml(a.reason || '')}</p>
                             <div class="vibe-stream-links" role="group" aria-label="Listen">
-                                <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.songYoutubeUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-youtube" aria-hidden="true"></i> YouTube</a>
+                                <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.songYoutubeUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-youtube" aria-hidden="true"></i> YouTube search</a>
                                 <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.searchUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-spotify" aria-hidden="true"></i> Spotify</a>
                                 <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.songSoundcloudUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-soundcloud" aria-hidden="true"></i> SoundCloud</a>
                             </div>
@@ -1050,9 +1394,10 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art1" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art1-inner">
                             <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.type || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(art1.name || '—')}</p>
+                            <p class="vibe-card-title">${escapeHtml(art1.label || art1.name || '—')}</p>
+                            ${artScore(art1.matchScore)}
                             <p class="vibe-card-body">${escapeHtml(art1.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">Find it</button>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">YouTube search</button>
                         </div>
                     </div>
                     <div class="vibe-rec-card" data-card="art2">
@@ -1060,9 +1405,10 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art2" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art2-inner">
                             <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.type || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(art2.name || '—')}</p>
+                            <p class="vibe-card-title">${escapeHtml(art2.label || art2.name || '—')}</p>
+                            ${artScore(art2.matchScore)}
                             <p class="vibe-card-body">${escapeHtml(art2.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">Find it</button>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">YouTube search</button>
                         </div>
                     </div>
                 </div>
@@ -1090,28 +1436,31 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 });
             });
 
+            const vibeSlotKey = (k) => {
+                if (k === 'artist') {
+                    const ar = vibeState.rec?.artist;
+                    return `${String(ar?.name || '')}|${String(ar?.song || '')}`;
+                }
+                if (k === 'art1') {
+                    const x = vibeState.rec?.art1;
+                    return String(x?.youtubeSearchQuery || x?.label || x?.name || '');
+                }
+                const x = vibeState.rec?.art2;
+                return String(x?.youtubeSearchQuery || x?.label || x?.name || '');
+            };
+
             vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
                 b.addEventListener('click', async () => {
                     const kind = b.getAttribute('data-reshuffle');
                     const card = b.closest('.vibe-rec-card');
                     const inner = card.querySelector('.vibe-card-inner');
-                    const prevName =
-                        kind === 'artist'
-                            ? String(vibeState.rec?.artist?.name || '')
-                            : kind === 'art1'
-                              ? String(vibeState.rec?.art1?.name || '')
-                              : String(vibeState.rec?.art2?.name || '');
+                    const prevName = vibeSlotKey(kind);
                     inner.innerHTML = cardSpinner();
                     const errEl = document.getElementById('vibe-step2-err');
                     if (errEl) errEl.classList.add('hidden');
                     try {
                         await runVibeReshuffle(kind, prevName);
-                        const nextName =
-                            kind === 'artist'
-                                ? String(vibeState.rec?.artist?.name || '')
-                                : kind === 'art1'
-                                  ? String(vibeState.rec?.art1?.name || '')
-                                  : String(vibeState.rec?.art2?.name || '');
+                        const nextName = vibeSlotKey(kind);
                         const hist =
                             kind === 'artist'
                                 ? vibeState.historyArtist
@@ -1171,9 +1520,25 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                     searchTrails: full.searchTrails,
                     searchUrls: full.searchUrls
                 };
-                vibeState.historyArtist = [String(vibeState.rec?.artist?.name || '')];
-                vibeState.historyArt1 = [String(vibeState.rec?.art1?.name || '')];
-                vibeState.historyArt2 = [String(vibeState.rec?.art2?.name || '')];
+                vibeState.historyArtist = [
+                    `${String(vibeState.rec?.artist?.name || '')}|${String(vibeState.rec?.artist?.song || '')}`
+                ];
+                vibeState.historyArt1 = [
+                    String(
+                        vibeState.rec?.art1?.youtubeSearchQuery ||
+                            vibeState.rec?.art1?.label ||
+                            vibeState.rec?.art1?.name ||
+                            ''
+                    )
+                ];
+                vibeState.historyArt2 = [
+                    String(
+                        vibeState.rec?.art2?.youtubeSearchQuery ||
+                            vibeState.rec?.art2?.label ||
+                            vibeState.rec?.art2?.name ||
+                            ''
+                    )
+                ];
                 renderResultsStep();
             } catch (e) {
                 setVibeStage(

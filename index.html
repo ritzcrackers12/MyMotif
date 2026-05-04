@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Motif — Cultural journal</title>
-    <link rel="stylesheet" href="style.css?v=3.0.0">
+    <link rel="stylesheet" href="style.css?v=3.0.1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -38,7 +38,7 @@
         <button type="button" class="toolbar-text-btn" id="favorites-open-btn" title="Saved suggestions"><i class="fa-regular fa-heart"></i> Favorites</button>
         <div class="divider-vertical"></div>
         <div class="user-actions">
-            <button type="button" class="icon-btn" id="groq-key-settings-btn" title="Groq API key" style="display: none;" aria-label="Groq API key"><i class="fa-solid fa-key"></i></button>
+            <button type="button" class="icon-btn" id="groq-key-settings-btn" title="API keys (Groq &amp; Spotify)" style="display: none;" aria-label="API keys"><i class="fa-solid fa-key"></i></button>
             <button type="button" class="icon-btn" id="save-cloud-btn" title="Save to Cloud" style="display: none;"><i class="fa-solid fa-cloud-arrow-up"></i></button>
             <button type="button" class="icon-btn login-trigger" title="Log In"><i class="fa-solid fa-user"></i></button>
         </div>
@@ -54,10 +54,14 @@
 
     <div id="groq-key-overlay" class="groq-key-overlay hidden" aria-hidden="true">
         <div class="groq-key-panel white-panel">
-            <h2 class="groq-key-title">Connect Groq</h2>
-            <p class="groq-key-desc">Paste your <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API key</a> so &ldquo;Find your vibe&rdquo; can run. Your key stays in this browser only — it is not saved to our servers or GitHub.</p>
-            <label class="groq-key-label" for="groq-key-input">API key</label>
+            <h2 class="groq-key-title">Connect APIs</h2>
+            <p class="groq-key-desc">Paste your <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API key</a> so &ldquo;Find your vibe&rdquo; can run. Optional: <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify Web API</a> Client ID + Client Secret for direct Spotify track links; if omitted, the app uses Apple iTunes search (real songs) and opens Spotify search for that track. Nothing is sent to our servers or GitHub — storage is in this browser only.</p>
+            <label class="groq-key-label" for="groq-key-input">Groq API key</label>
             <input type="password" id="groq-key-input" class="groq-key-input" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
+            <label class="groq-key-label" for="spotify-client-id-input" style="margin-top:12px">Spotify Client ID (optional)</label>
+            <input type="text" id="spotify-client-id-input" class="groq-key-input" autocomplete="off" spellcheck="false" placeholder="Client ID" />
+            <label class="groq-key-label" for="spotify-client-secret-input" style="margin-top:8px">Spotify Client Secret (optional)</label>
+            <input type="password" id="spotify-client-secret-input" class="groq-key-input" autocomplete="off" spellcheck="false" placeholder="Client secret" />
             <p class="groq-key-error hidden" id="groq-key-error" role="alert"></p>
             <div class="groq-key-actions">
                 <button type="button" class="secondary-btn groq-key-cancel-btn hidden" id="groq-key-cancel-btn">Cancel</button>
@@ -66,6 +70,6 @@
         </div>
     </div>
 
-    <script type="module" src="script.js?v=2.3.3"></script>
+    <script type="module" src="script.js?v=2.4.0"></script>
 </body>
 </html>
