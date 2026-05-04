@@ -20,13 +20,13 @@ import {
     deleteDoc,
     serverTimestamp
 } from './firebase.js';
+import { GROQ_SYSTEM_PROMPT } from './groq-system-prompt.js';
 import {
     CURATOR_ARTISTS,
-    buildVibeStep1FullPrompt,
-    buildVibeStep2FullPrompt,
-    buildVibeStep2RetryFullPrompt,
-    buildVibeReshuffleMusicFullPrompt,
-    buildVibeReshuffleArtFullPrompt
+    buildVibeStep1OutputContract,
+    buildVibeStep2OutputContract,
+    buildVibeReshuffleMusicContract,
+    buildVibeReshuffleArtContract
 } from './curator-prompt.js';
 
 /** Prefer model watch/results URL; else YouTube search for artist + song. */
@@ -958,7 +958,10 @@ const initApp = async () => {
                             },
                             body: JSON.stringify({
                                 model,
-                                messages: [{ role: 'user', content: fullPromptText }],
+                                messages: [
+                                    { role: 'system', content: GROQ_SYSTEM_PROMPT },
+                                    { role: 'user', content: fullPromptText }
+                                ],
                                 temperature,
                                 max_tokens
                             }),
@@ -1278,7 +1281,7 @@ const initApp = async () => {
 
         async function runExplainStep(entryText, track, step1, meta) {
             const step2Task = buildStep2UserTask(entryText, track, step1, meta);
-            const data2 = await groqChatCompletion(buildVibeStep2FullPrompt(step2Task), {
+            const data2 = await groqChatCompletion(`${step2Task}\n\n${buildVibeStep2OutputContract()}`, {
                 temperature: 0.72,
                 max_tokens: 2048
             });
@@ -1294,7 +1297,7 @@ Journal:
 ${entryText}
 ---`;
 
-            const data1 = await groqChatCompletion(buildVibeStep1FullPrompt(step1Task), {
+            const data1 = await groqChatCompletion(`${step1Task}\n\n${buildVibeStep1OutputContract()}`, {
                 temperature: 0.78,
                 max_tokens: 2048
             });
@@ -1324,10 +1327,13 @@ ${entryText}
                     extraNote:
                         'After ONE refined mood search (same curator artist). Set refinedSpotifyQuery to null.'
                 });
-                const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
-                    temperature: 0.72,
-                    max_tokens: 2048
-                });
+                const dataRetry = await groqChatCompletion(
+                    `Note: Final pass after refined search. Set refinedSpotifyQuery to null.\n\n${retryTask}\n\n${buildVibeStep2OutputContract()}`,
+                    {
+                        temperature: 0.72,
+                        max_tokens: 2048
+                    }
+                );
                 step2 = parseVibeJsonFromResponse(dataRetry);
             }
 
@@ -1368,7 +1374,7 @@ Previous search used: ${rec.artist?.spotifySearchQuery || ''}
 
 Pick a **different** artist from the allowed list + new mood keywords. Avoid mimicking: "${avoidName}"`;
 
-                const data = await groqChatCompletion(buildVibeReshuffleMusicFullPrompt(userP), {
+                const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleMusicContract()}`, {
                     temperature: 0.9,
                     max_tokens: 512
                 });
@@ -1398,10 +1404,13 @@ Pick a **different** artist from the allowed list + new mood keywords. Avoid mim
                         extraNote:
                             'Refined mood pass (final). Set refinedSpotifyQuery to null in your JSON output.'
                     });
-                    const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
-                        temperature: 0.72,
-                        max_tokens: 2048
-                    });
+                    const dataRetry = await groqChatCompletion(
+                        `Note: Final pass after refined search. Set refinedSpotifyQuery to null.\n\n${retryTask}\n\n${buildVibeStep2OutputContract()}`,
+                        {
+                            temperature: 0.72,
+                            max_tokens: 2048
+                        }
+                    );
                     step2 = parseVibeJsonFromResponse(dataRetry);
                 }
                 vibeState.rec = buildRecFromPipeline(step1Preserve, track, step2, usedQuery, newCanon);
@@ -1424,7 +1433,7 @@ Previous creatorName: ${prevSlot?.creatorName || ''}
 Other slot (stay different): ${other?.workTitle || ''} / ${other?.creatorName || ''}
 Avoid repeating: "${avoidName}"`;
 
-            const data = await groqChatCompletion(buildVibeReshuffleArtFullPrompt(userP), {
+            const data = await groqChatCompletion(`${userP}\n\n${buildVibeReshuffleArtContract()}`, {
                 temperature: 0.88,
                 max_tokens: 1024
             });
