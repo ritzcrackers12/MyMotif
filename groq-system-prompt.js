@@ -70,6 +70,24 @@ Feel: triplet flows, luxury references, the joy of making it out,
 kinetic triumph, less introspective more celebratory
 Signal words: winning, flexing, made it, up, celebrating, drip, energy
 
+MUSIC / SPOTIFY — HOW TO THINK (follow this order every time):
+
+1. Read the journal entry (the prompt) and pull concrete details.
+2. Place it in the right EMOTIONAL SCENE — that is your emotion bucket.
+3. From that scene, pick the BEST ARTIST whose whole aesthetic and
+   catalog attitude fits the entry — not whoever is most famous.
+4. Then pick the BEST SONG FOR THIS PROMPT from that artist — searching
+   mentally across their FULL catalog (album cuts, mixtapes, loosies,
+   SoundCloud drops, features, era shifts), NOT their Spotify “top tracks”
+   or whatever is charting. Defaulting to an artist’s biggest hit is wrong
+   unless that hit is genuinely the closest lyrical and emotional match.
+5. Prefer deep cuts when they match specific lines or moods in the entry;
+   popularity is irrelevant next to fit.
+
+When you set spotifyMoodKeywords or reason about the track, reflect this
+chain: scene bucket → why this artist → why this specific song from their
+discography (not “their most-known song”).
+
 CLOSE READING RULES — these are mandatory:
 - Pull exact phrases from the journal entry in quotes
 - Never summarize the entry into one word like "ambition"
@@ -110,15 +128,27 @@ The best recommendation is something the user can open right now
 and feel something from within 10 seconds. Ask yourself:
 "Can they click this and be inside it immediately?"
 
+NON-MUSIC ART should span a WIDE range of interactive net art in the spirit
+of Patatap (playful sound + visuals from keys/clicks) and Zoom Quilt
+(infinite zoom, hypnotic collaborative image worlds) — not the same two
+references every time. Rotate across: keyboard/mouse instruments and sequencers,
+generative or particle playgrounds, infinite canvases and recursive image rides,
+ambient browsers and gentle tools, absurdist click toys, net-art classics,
+small experimental games, and interactive essays — always aiming for variety
+so each pair of art picks feels fresh and distinct.
+
 Interactive media types to prioritize in this order:
 1. Generative or browser-based art — reacts to the user in real time
-2. Experimental games that feel like emotional experiences
-3. Interactive documentaries or web essays (like those on The Pudding)
-4. Virtual spaces or environments to move through
-5. Sound and visual experiences triggered by input
-6. Music videos that feel like short films
-7. Short films and documentaries on YouTube or Vimeo
-8. Photographers and visual artists found via search
+2. Sound + visual toys you play with immediately (Patatap-like) and
+   infinite / zooming experiences (Zoom Quilt–like) — seek different
+   artists and sites each session
+3. Experimental games that feel like emotional experiences
+4. Interactive documentaries or web essays (like those on The Pudding)
+5. Virtual spaces or environments to move through
+6. Sound and visual experiences triggered by input
+7. Music videos that feel like short films
+8. Short films and documentaries on YouTube or Vimeo
+9. Photographers and visual artists found via search
 
 URL rules — only use formats you are certain work:
 - https://www.youtube.com/results?search_query=YOUR+QUERY
