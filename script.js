@@ -1638,9 +1638,9 @@ Avoid repeating: "${avoidName}"`;
 
             function resize() {
                 const wrap = canvas.closest('.vibe-loading-doodle-wrap');
-                const w = wrap ? Math.floor(wrap.getBoundingClientRect().width) : 320;
-                logicalW = Math.max(240, w);
-                logicalH = 132;
+                const r = wrap ? wrap.getBoundingClientRect() : canvas.getBoundingClientRect();
+                logicalW = Math.max(200, Math.floor(r.width));
+                logicalH = Math.max(160, Math.floor(r.height));
                 const dpr = Math.min(window.devicePixelRatio || 1, 2);
                 canvas.style.width = `${logicalW}px`;
                 canvas.style.height = `${logicalH}px`;
@@ -1705,7 +1705,9 @@ Avoid repeating: "${avoidName}"`;
             }
 
             function onDown(e) {
-                if (e.button !== undefined && e.button !== 0) return;
+                if (e.pointerType === 'mouse' && e.button !== undefined && e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
                 drawing = true;
                 strokes.push([]);
                 addPoint(e);
@@ -1718,10 +1720,12 @@ Avoid repeating: "${avoidName}"`;
 
             function onMove(e) {
                 if (!drawing) return;
+                e.preventDefault();
                 addPoint(e);
             }
 
             function onUp(e) {
+                if (!drawing) return;
                 drawing = false;
                 try {
                     canvas.releasePointerCapture(e.pointerId);
@@ -1730,7 +1734,13 @@ Avoid repeating: "${avoidName}"`;
                 }
             }
 
+            const listenerOpts = { passive: false };
+
             resize();
+            requestAnimationFrame(() => {
+                resize();
+                requestAnimationFrame(() => resize());
+            });
             rafId = requestAnimationFrame(paint);
             window.addEventListener('resize', resize);
             if (typeof ResizeObserver !== 'undefined') {
@@ -1739,19 +1749,21 @@ Avoid repeating: "${avoidName}"`;
                 if (wrap) ro.observe(wrap);
             }
 
-            canvas.addEventListener('pointerdown', onDown);
-            canvas.addEventListener('pointermove', onMove);
+            canvas.addEventListener('pointerdown', onDown, listenerOpts);
+            canvas.addEventListener('pointermove', onMove, listenerOpts);
             canvas.addEventListener('pointerup', onUp);
             canvas.addEventListener('pointercancel', onUp);
+            canvas.addEventListener('lostpointercapture', onUp);
 
             return () => {
                 cancelAnimationFrame(rafId);
                 window.removeEventListener('resize', resize);
                 if (ro) ro.disconnect();
-                canvas.removeEventListener('pointerdown', onDown);
-                canvas.removeEventListener('pointermove', onMove);
+                canvas.removeEventListener('pointerdown', onDown, listenerOpts);
+                canvas.removeEventListener('pointermove', onMove, listenerOpts);
                 canvas.removeEventListener('pointerup', onUp);
                 canvas.removeEventListener('pointercancel', onUp);
+                canvas.removeEventListener('lostpointercapture', onUp);
             };
         }
 
@@ -1777,12 +1789,14 @@ Avoid repeating: "${avoidName}"`;
                 'SlimeServers are still connecting... wait 1 more second for me 5';
             let secondsLeft = 60;
             setVibeStage(`<div class="vibe-loading" id="vibe-loading-root">
-                <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
-                <p class="vibe-loading-countdown" id="vibe-countdown-display">${formatVibeLoadingCountdown(secondsLeft)}</p>
+                <p class="vibe-loading-summon-hint">click and drag on this canvas to summon that slime</p>
+                <div class="vibe-loading-head">
+                    <i class="fa-solid fa-spinner fa-spin vibe-loading-spinner" aria-hidden="true"></i>
+                    <p class="vibe-loading-countdown" id="vibe-countdown-display">${formatVibeLoadingCountdown(secondsLeft)}</p>
+                </div>
                 <p class="vibe-loading-status" id="vibe-loading-status" aria-live="polite"></p>
                 <div class="vibe-loading-doodle-wrap">
-                    <p class="vibe-loading-doodle-hint">hold &amp; drag — slime green trail</p>
-                    <canvas class="vibe-loading-canvas" id="vibe-loading-canvas" width="320" height="132" role="img" aria-label="Doodle while you wait"></canvas>
+                    <canvas class="vibe-loading-canvas" id="vibe-loading-canvas" role="img" aria-label="Slime drawing canvas"></canvas>
                 </div>
             </div>`);
             const disposeLoadingDoodle = attachVibeLoadingSlimeDoodle();
