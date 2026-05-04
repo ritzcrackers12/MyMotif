@@ -1,9 +1,38 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId;
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    /**
+     * MyMotif workspace: canvas HTML, profile fields, timestamps.
+     * Path: users/{uid}/boards/{boardId}  (app uses boardId "default")
+     */
+    match /users/{userId}/boards/{boardId} {
+      allow read, write: if isOwner(userId);
+
+      /**
+       * Per-frame journal text synced from the canvas.
+       * Path: users/{uid}/boards/{boardId}/frames/{frameId}
+       */
+      match /frames/{frameId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    /**
+     * Legacy canvas doc used only to read old data and migrate into users/{uid}/boards/default.
+     * Path: boards/{uid} where uid is the signed-in user.
+     */
+    match /boards/{legacyUserId} {
+      allow read: if isOwner(legacyUserId);
+      allow write: if isOwner(legacyUserId);
     }
   }
 }

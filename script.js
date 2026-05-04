@@ -1197,7 +1197,11 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                     setTimeout(() => {
                         saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
                     }, 2000);
-                    alert('Failed to save. Check Firestore rules for users/{yourUid}/**');
+                    const code = error && error.code ? error.code : '';
+                    const msg = error && error.message ? error.message : String(error);
+                    alert(
+                        `Save failed${code ? ` (${code})` : ''}: ${msg}\n\nIf you see permission-denied, deploy the rules in this repo:\nfirebase deploy --only firestore:rules`
+                    );
                 }
             });
         }
