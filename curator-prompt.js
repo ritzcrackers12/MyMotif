@@ -83,9 +83,33 @@ SONG MUST BE REAL (zero hallucinations):
 
 USER-FACING REASONS (artist.reason, art1.reason, art2.reason): Only their journal — quote their words. Forbidden: song title, lyrics, "this track," tying text to the pick. Choose art from the scene's art-world row + user's specifics; written reasons stay journal-only.
 
-ART SLOTS: Same scene energy as song; never essays/blogs. Watchable/interactive fast: video search, arts & culture, known sites (patatap radio.garden windows93 theQuietPlace neal.fun). art2 category ≠ art1. Specific works; stable search URLs.
+VISUAL ART DISCOVERY: Match the EXACT cultural moment of the rapper — not distant art history. Think album-cover and music-video energy: underground photographers, rap-adjacent visual directors, niche designers. Hunt lesser-known / niche work first (examples of the lane: ArtDealer, paintingdemons — find obscurities in that spirit, not only famous painters).
 
-JSON only. No markdown or preamble.`;
+Priority order for art type:
+(1) Interactive web the user can open and feel NOW — ask: "Can they get something alive in under ~10 seconds of clicking?"
+(2) Music videos / short films → use YouTube **search** URL in findUrl (never fragile watch links for art).
+(3) Visual artists / photographers → Google Arts & Culture entity/browse URLs you trust, OR Google **web** search with queries like \`site:instagram.com\` + artist + aesthetic terms (do **not** paste invented instagram.com direct profile URLs).
+(4) Paintings / physical art only when uniquely perfect for this journal.
+
+Interactive-first categories (when scene fits): generative / mouse-reactive sites; browser net art; interactive sound; experimental games-as-art; live data viz; virtual spaces; AI toys that feel like creative play — not productivity SaaS.
+
+SCENE → INTERACTIVE LANE (pair with journal specifics):
+1 LONGING/DISSOCIATION — drift, float, infinite zoom, ambient generators, virtual windows into other worlds.
+2 PARANOIA/SURVIVAL — tension/release, watched/urgent feels, interactive documentary journalism.
+3 IDENTITY/FASHION — digital fashion / interactive lookbooks, diaspora archives online, runway energy you can click through.
+4 DARK/VOID — glitch, intentional broken UI, void generative work, system-failure aesthetics.
+5 INTERNET/CHAOS — cursed interactive sites, deliberately wrong AI toys, meme-native browser art.
+6 STREET — interactive documentary, Street View art projects, city sound maps, neighborhood archives.
+7 SOUTHERN GOTHIC/RAW — slow heavy interfaces, devotional interactives, letter-writing UIs, memory archives.
+8 FLEX — maximalist digital spaces, opulent interactive rooms, expensive-alive energy.
+
+MECE (art picks): Each pick must match BOTH the emotional scene AND at least one concrete detail from **this** journal entry — never something generic enough for "any" entry.
+
+findUrl LINK CONTRACT (hard rules — broken URLs break the app):
+- ALLOWED patterns only: YouTube **results** \`https://www.youtube.com/results?search_query=...\`; Vimeo **search** \`https://vimeo.com/search?q=...\`; \`https://artsandculture.google.com/\` (real paths); \`https://archive.org/\`; Google web search \`https://www.google.com/search?q=...\`; Google Images \`https://www.google.com/search?tbm=isch&q=...\`; MoMA / Met / Tate official domains; roots patatap.com radio.garden windows93.net thequietplace.xyz neal.fun.
+- FORBIDDEN for art findUrl: youtube.com/watch, youtu.be, bare vimeo.com/123456 video IDs, Medium/Substack/random blogs, guessed deep links, made-up paths. If unsure, use YouTube results search or Google web search with a descriptive multi-word query — never invent a permalink.
+
+art2 category ≠ art1. JSON only. No markdown or preamble.`;
 }
 
 /** Short output rules appended after USER TASK (overlap with system prompt removed). */
@@ -94,7 +118,7 @@ export function buildVibeGroqOutputContract() {
 
 Artist: searchUrl="spotify"; songYoutubeUrl=watch URL or null; songSoundcloudUrl=null; albumCover=null (optional). \`artist.song\` = verifiable real track only (see system prompt).
 
-Art findUrl: allowed — YouTube/Vimeo search, artsandculture.google.com, archive.org, MoMA/Met/Tate, google isch, or known roots patatap.com radio.garden windows93.net theQuietPlace.xyz neal.fun. No blogs/news/medium.
+Art findUrl: ONLY stable discovery URLs — youtube **results** (\`/results?search_query=\`), vimeo **search** (\`/search?q=\`), artsandculture.google.com, archive.org, google.com/search or ?tbm=isch, MoMA/Met/Tate, patatap/radio.garden/windows93/theQuietPlace/neal.fun. Never youtube watch, youtu.be, or vimeo video ID URLs for art. Never Medium/Substack/blogs or invented paths; prefer search URLs over guessing.
 
 Trails: exactly 3 concrete multi-word queries; one mentions Genius or Reddit; searchUrls = 3 matching https://www.google.com/search?q=...
 

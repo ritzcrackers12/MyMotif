@@ -39,12 +39,16 @@ function resolveYoutubeSongUrl(url, fallbackQuery) {
     return `https://www.youtube.com/results?search_query=${encodeURIComponent(fallbackQuery)}`;
 }
 
+function youtubeHost(h) {
+    return h === 'youtube.com' || h === 'm.youtube.com' || h === 'music.youtube.com';
+}
+
 function urlPassesArtFindPolicy(url) {
     if (!url || typeof url !== 'string') return false;
     try {
         const u = new URL(url);
         const h = u.hostname.replace(/^www\./, '');
-        if (h === 'youtube.com') {
+        if (youtubeHost(h)) {
             if (u.pathname.startsWith('/results')) return true;
             if (u.searchParams.has('search_query')) return true;
         }
@@ -70,8 +74,17 @@ function coerceArtFindUrl(art) {
     try {
         if (url) {
             const u = new URL(url);
-            if ((u.hostname.includes('youtube.com') && u.pathname === '/watch') || u.hostname === 'youtu.be') {
+            const h = u.hostname.replace(/^www\./, '');
+            const isYtWatch =
+                u.hostname === 'youtu.be' ||
+                (youtubeHost(h) && (u.pathname === '/watch' || u.pathname.startsWith('/shorts/')));
+            if (isYtWatch) {
                 art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+                return;
+            }
+            if (h === 'vimeo.com' && u.pathname.startsWith('/search')) return;
+            if (h === 'vimeo.com' && /^\/\d+/.test(u.pathname)) {
+                art.findUrl = `https://vimeo.com/search?q=${encodeURIComponent(q)}`;
                 return;
             }
         }
