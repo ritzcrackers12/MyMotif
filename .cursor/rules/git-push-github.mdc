@@ -1,0 +1,14 @@
+---
+description: After code changes, commit and push to GitHub (main)
+alwaysApply: true
+---
+
+# Ship changes to GitHub
+
+Whenever you finish a task that modifies project files:
+
+1. Run `git status` and stage all intended changes (`git add`).
+2. Commit with a clear message summarizing what changed and why.
+3. Push to `origin main`: `git push origin main`.
+
+Do this as part of the same session—do not leave unpushed commits unless the user explicitly asks not to push. If push fails (auth, network), report the error and what to fix.
