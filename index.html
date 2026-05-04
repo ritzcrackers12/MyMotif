@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Motif — Cultural journal</title>
-    <link rel="stylesheet" href="style.css?v=2.0.0">
+    <link rel="stylesheet" href="style.css?v=2.0.6">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
@@ -38,6 +38,7 @@
         </div>
         <div class="divider-vertical"></div>
         <div class="user-actions">
+            <button type="button" class="icon-btn" id="groq-key-settings-btn" title="Groq API key" style="display: none;" aria-label="Groq API key"><i class="fa-solid fa-key"></i></button>
             <button type="button" class="icon-btn" id="save-cloud-btn" title="Save to Cloud" style="display: none;"><i class="fa-solid fa-cloud-arrow-up"></i></button>
             <button type="button" class="icon-btn login-trigger" title="Log In"><i class="fa-solid fa-user"></i></button>
         </div>
@@ -51,7 +52,20 @@
         </main>
     </div>
 
-    <!-- Groq: add a non-module script *above* this line with window.MYMOTIF_GROQ_API_KEY = '…'; (keep out of git). -->
-    <script type="module" src="script.js?v=2.0.5"></script>
+    <div id="groq-key-overlay" class="groq-key-overlay hidden" aria-hidden="true">
+        <div class="groq-key-panel white-panel">
+            <h2 class="groq-key-title">Connect Groq</h2>
+            <p class="groq-key-desc">Paste your <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API key</a> so &ldquo;Find your vibe&rdquo; can run. Your key stays in this browser only — it is not saved to our servers or GitHub.</p>
+            <label class="groq-key-label" for="groq-key-input">API key</label>
+            <input type="password" id="groq-key-input" class="groq-key-input" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
+            <p class="groq-key-error hidden" id="groq-key-error" role="alert"></p>
+            <div class="groq-key-actions">
+                <button type="button" class="secondary-btn groq-key-cancel-btn hidden" id="groq-key-cancel-btn">Cancel</button>
+                <button type="button" class="primary-btn" id="groq-key-save-btn">Save &amp; continue</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="script.js?v=2.0.6"></script>
 </body>
 </html>

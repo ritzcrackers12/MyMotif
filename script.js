@@ -19,7 +19,33 @@ import {
 } from './firebase.js';
 import { buildCuratorSystemPrompt } from './curator-prompt.js';
 
-/** Set before loading `script.js`: `window.MYMOTIF_GROQ_API_KEY = 'gsk_...'` (inline `<script>` above the module tag). Do not commit real keys — GitHub blocks pushes that contain API secrets. */
+const GROQ_KEY_STORAGE = 'mymotif_groq_api_key_v1';
+
+/** Inline override for dev only — prefer pasting in the post-login prompt (stored in localStorage). */
+function getGroqApiKey() {
+    try {
+        const w =
+            typeof window !== 'undefined' &&
+            typeof window.MYMOTIF_GROQ_API_KEY === 'string' &&
+            window.MYMOTIF_GROQ_API_KEY.trim();
+        if (w) return window.MYMOTIF_GROQ_API_KEY.trim();
+        const s = localStorage.getItem(GROQ_KEY_STORAGE);
+        return s && s.trim() ? s.trim() : '';
+    } catch {
+        return '';
+    }
+}
+
+function saveGroqApiKey(key) {
+    const t = String(key || '').trim();
+    if (!t) return false;
+    try {
+        localStorage.setItem(GROQ_KEY_STORAGE, t);
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 const WORKSPACE_BOARD_ID = 'default';
 
@@ -127,6 +153,86 @@ const initApp = async () => {
         }
         if (typeof auth.authStateReady === 'function') {
             await auth.authStateReady();
+        }
+
+        let groqEditOpen = false;
+        const groqKeyOverlay = document.getElementById('groq-key-overlay');
+        const groqKeyInput = document.getElementById('groq-key-input');
+        const groqKeySaveBtn = document.getElementById('groq-key-save-btn');
+        const groqKeyCancelBtn = document.getElementById('groq-key-cancel-btn');
+        const groqKeyError = document.getElementById('groq-key-error');
+        const groqKeySettingsBtn = document.getElementById('groq-key-settings-btn');
+
+        function setGroqKeyError(msg) {
+            if (!groqKeyError) return;
+            if (msg) {
+                groqKeyError.textContent = msg;
+                groqKeyError.classList.remove('hidden');
+            } else {
+                groqKeyError.textContent = '';
+                groqKeyError.classList.add('hidden');
+            }
+        }
+
+        function syncGroqKeyToolbar() {
+            if (!groqKeySettingsBtn) return;
+            groqKeySettingsBtn.style.display = auth.currentUser && getGroqApiKey() ? 'flex' : 'none';
+        }
+
+        function applyGroqOverlayState() {
+            if (!groqKeyOverlay) return;
+            const hasKey = !!getGroqApiKey();
+            const needsBlocking = !!(auth.currentUser && !hasKey);
+            const show = needsBlocking || groqEditOpen;
+            groqKeyOverlay.classList.toggle('hidden', !show);
+            groqKeyOverlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+            if (groqKeyCancelBtn) {
+                const showCancel = !!(groqEditOpen && auth.currentUser && hasKey);
+                groqKeyCancelBtn.classList.toggle('hidden', !showCancel);
+            }
+        }
+
+        function openGroqKeyEditor() {
+            groqEditOpen = true;
+            if (groqKeyInput) groqKeyInput.value = '';
+            setGroqKeyError('');
+            applyGroqOverlayState();
+            groqKeyInput?.focus();
+        }
+
+        if (groqKeySaveBtn && groqKeyInput) {
+            groqKeySaveBtn.addEventListener('click', () => {
+                const raw = groqKeyInput.value.trim();
+                if (!raw) {
+                    setGroqKeyError('Paste your Groq API key to continue.');
+                    return;
+                }
+                if (!saveGroqApiKey(raw)) {
+                    setGroqKeyError('Could not save key (browser storage blocked?).');
+                    return;
+                }
+                groqEditOpen = false;
+                setGroqKeyError('');
+                applyGroqOverlayState();
+                syncGroqKeyToolbar();
+            });
+            groqKeyInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    groqKeySaveBtn.click();
+                }
+            });
+        }
+        if (groqKeyCancelBtn) {
+            groqKeyCancelBtn.addEventListener('click', () => {
+                groqEditOpen = false;
+                if (groqKeyInput) groqKeyInput.value = '';
+                setGroqKeyError('');
+                applyGroqOverlayState();
+            });
+        }
+        if (groqKeySettingsBtn) {
+            groqKeySettingsBtn.addEventListener('click', () => openGroqKeyEditor());
         }
 
         let cloudSaveTimer = null;
@@ -268,7 +374,10 @@ const initApp = async () => {
                 } catch (e) {
                     console.error('Load Error:', e);
                 }
+                syncGroqKeyToolbar();
+                applyGroqOverlayState();
             } else {
+                groqEditOpen = false;
                 landingPage.classList.remove('hidden');
                 landingPage.style.display = 'flex';
                 if (userIconBtn) {
@@ -276,6 +385,8 @@ const initApp = async () => {
                     userIconBtn.title = 'Log in';
                 }
                 if (saveCloudBtn) saveCloudBtn.style.display = 'none';
+                syncGroqKeyToolbar();
+                applyGroqOverlayState();
             }
         });
 
@@ -330,20 +441,16 @@ const initApp = async () => {
             });
         }
 
-        const winGroqOverride =
-            typeof window !== 'undefined' &&
-            typeof window.MYMOTIF_GROQ_API_KEY === 'string' &&
-            window.MYMOTIF_GROQ_API_KEY.trim();
-        const GROQ_API_KEY = winGroqOverride || '';
         const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
         const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile'];
 
         const GROQ_FETCH_TIMEOUT_MS = 75000;
 
         async function groqChatCompletion(fullPromptText, { temperature, max_tokens }) {
-            if (!GROQ_API_KEY) {
+            const apiKey = getGroqApiKey();
+            if (!apiKey) {
                 throw new Error(
-                    'Missing Groq API key. Add an inline script above the module script: window.MYMOTIF_GROQ_API_KEY = "your_key";'
+                    'Missing Groq API key. Sign in and paste your key in the Connect Groq dialog, or set window.MYMOTIF_GROQ_API_KEY for local dev.'
                 );
             }
             let lastMessage = '';
@@ -358,7 +465,7 @@ const initApp = async () => {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
-                                Authorization: `Bearer ${GROQ_API_KEY}`
+                                Authorization: `Bearer ${apiKey}`
                             },
                             body: JSON.stringify({
                                 model,

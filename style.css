@@ -841,6 +841,104 @@ h1, h2, h3, h4, h5, h6 {
     100% { transform: translate(60px, 60px) scale(1.05); }
 }
 
+/* --- Groq API key (after login; key in localStorage only) --- */
+.groq-key-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 8888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(248, 247, 244, 0.92);
+    backdrop-filter: blur(12px);
+    transition: opacity 0.35s ease, visibility 0.35s;
+}
+.groq-key-overlay.hidden {
+    display: none;
+    pointer-events: none;
+}
+.groq-key-panel {
+    width: 100%;
+    max-width: 440px;
+    padding: 28px 28px 24px;
+    border-radius: 20px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.1);
+}
+.groq-key-title {
+    font-size: 22px;
+    margin-bottom: 10px;
+}
+.groq-key-desc {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+.groq-key-desc a {
+    color: var(--accent);
+    font-weight: 600;
+    text-decoration: none;
+}
+.groq-key-desc a:hover {
+    text-decoration: underline;
+}
+.groq-key-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+.groq-key-input {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 13px;
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+.groq-key-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(107, 92, 231, 0.2);
+}
+.groq-key-error {
+    font-size: 12px;
+    color: #DC2626;
+    margin-bottom: 12px;
+}
+.groq-key-error.hidden {
+    display: none;
+}
+.groq-key-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+.groq-key-actions .primary-btn,
+.groq-key-actions .secondary-btn {
+    min-width: 120px;
+}
+.groq-key-actions .secondary-btn {
+    padding: 10px 16px;
+    font-size: 13px;
+    border-radius: 10px;
+    border: 1px solid var(--border-soft);
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+}
+.groq-key-actions .secondary-btn:hover {
+    background: var(--btn-hover);
+}
+
 /* --- IMAGE COMMENTS: inline editor + collapsed chip (linked via data-comment on .motif-image-node) --- */
 .image-comment-editor {
     position: absolute;
