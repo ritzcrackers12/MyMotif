@@ -17,7 +17,75 @@ import {
     collection,
     getDocs
 } from './firebase.js';
-import { buildCuratorSystemPrompt } from './curator-prompt.js';
+import { buildCuratorSystemPrompt, buildVibeGroqOutputContract } from './curator-prompt.js';
+
+function parseYoutubeVideoIdForArtist(url) {
+    if (!url || typeof url !== 'string') return null;
+    const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    return m ? m[1] : null;
+}
+
+function urlPassesArtFindPolicy(url) {
+    if (!url || typeof url !== 'string') return false;
+    try {
+        const u = new URL(url);
+        const h = u.hostname.replace(/^www\./, '');
+        if (h === 'youtube.com') {
+            if (u.pathname.startsWith('/results')) return true;
+            if (u.searchParams.has('search_query')) return true;
+        }
+        if (h === 'vimeo.com' && u.pathname.startsWith('/search')) return true;
+        if (h === 'artsandculture.google.com') return true;
+        if (h === 'archive.org') return true;
+        if (h === 'google.com' && (u.searchParams.get('tbm') === 'isch' || u.pathname.startsWith('/search')))
+            return true;
+        const museums = ['moma.org', 'metmuseum.org', 'tate.org.uk'];
+        if (museums.some((m) => h === m || h.endsWith('.' + m))) return true;
+        const knownLive = ['patatap.com', 'radio.garden', 'windows93.net', 'thequietplace.xyz', 'neal.fun'];
+        if (knownLive.includes(h)) return true;
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+function coerceArtFindUrl(art) {
+    if (!art || typeof art !== 'object') return;
+    const q = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
+    let url = String(art.findUrl || '').trim();
+    try {
+        if (url) {
+            const u = new URL(url);
+            if ((u.hostname.includes('youtube.com') && u.pathname === '/watch') || u.hostname === 'youtu.be') {
+                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+                return;
+            }
+        }
+    } catch {
+        /* ignore */
+    }
+    if (!urlPassesArtFindPolicy(url)) {
+        art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+    }
+}
+
+function normalizeRecommendationUrls(rec) {
+    if (!rec || typeof rec !== 'object') return rec;
+    const song = rec.artist?.song || '';
+    const name = rec.artist?.name || '';
+    const spotifyQ = [song, name].filter(Boolean).join(' ').trim() || name || 'music';
+    if (rec.artist && typeof rec.artist === 'object') {
+        rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(spotifyQ)}`;
+    }
+    coerceArtFindUrl(rec.art1);
+    coerceArtFindUrl(rec.art2);
+    let trails = Array.isArray(rec.searchTrails) ? rec.searchTrails.map((t) => String(t || '').trim()).filter(Boolean) : [];
+    while (trails.length < 3) trails.push('underground rap emotional texture scene');
+    trails = trails.slice(0, 3);
+    rec.searchTrails = trails;
+    rec.searchUrls = trails.map((t) => `https://www.google.com/search?q=${encodeURIComponent(t)}`);
+    return rec;
+}
 
 const GROQ_KEY_STORAGE = 'mymotif_groq_api_key_v1';
 
@@ -542,8 +610,8 @@ const initApp = async () => {
             selected: [],
             rec: null,
             historyArtist: [],
-            historyArt: [],
-            historySearch: []
+            historyArt1: [],
+            historyArt2: []
         };
 
         function openVibePanel() {
@@ -559,13 +627,25 @@ const initApp = async () => {
             vibeStage.innerHTML = html;
         }
 
-        /** Same shape as before: curator system prompt + USER TASK + model instructions (unchanged). */
+        /** Curator + task + Groq output contract (link rules, close reading, schema hints). */
         function buildVibeFullPrompt(userTaskText) {
-            return `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}`;
+            return `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}\n\n${buildVibeGroqOutputContract()}`;
         }
 
         async function runVibeJournalToRecommendations(entryText) {
-            const userPrompt = `Read this journal entry. Infer the primary emotional register, then recommend exactly ONE artist/song, ONE specific art work (any medium), and ONE search query to go deeper — all matching that vibe. Use the emotional scene map from your instructions.
+            const userPrompt = `You are doing CLOSE READING of this journal entry, not summarizing it.
+Your job is to find SPECIFIC DETAILS and match them to SPECIFIC moments in art and music — not general vibes.
+
+Rules for analysis:
+- Pull out literal words and phrases from the entry.
+- Find songs where the rapper uses similar specific language or imagery; say which lyric or moment matches.
+- If the entry mentions hunger, find a song about literal or metaphorical hunger — name the moment.
+- If the entry mentions a good mood, find the song that captures that exact quality of lightness, not just "happy rap."
+- Never boil the entry down to one word like "ambition" — name 2–3 specific details from the entry and explain how each maps to the recommendation.
+- The reason fields should quote SPECIFIC words or phrases from the journal entry, then connect them to the recommended work.
+- For art: capture the TEXTURE of the feeling. Example of BAD reason: "This matches the ambition in your entry." Example of GOOD reason: "Your line about being hungry both internally and externally maps directly to how [song] rides a restless, reaching energy — [artist] is literally rapping about wanting more of everything while sounding like he's in a great mood doing it."
+
+Do not ask generic questions in your prose — reference specific words from the journal in your reasons and search trails as if follow-ups were micro-specific ("If they said 'hungry', tie recommendations to that hunger.").
 
 Return ONLY this JSON, nothing else:
 {
@@ -573,49 +653,45 @@ Return ONLY this JSON, nothing else:
   "artist": {
     "name": string,
     "song": string | null,
+    "albumCover": string | null,
     "reason": string,
     "searchUrl": string
   },
-  "art": {
+  "art1": {
     "name": string,
     "type": string,
     "reason": string,
     "findUrl": string
   },
-  "searchQuery": {
-    "text": string,
-    "url": string
-  }
+  "art2": {
+    "name": string,
+    "type": string,
+    "reason": string,
+    "findUrl": string
+  },
+  "searchTrails": [string, string, string],
+  "searchUrls": [string, string, string]
 }
 
-For searchUrl: https://open.spotify.com/search/[encoded artist name]
-For findUrl: most specific URL possible — direct link, YouTube search, or Google search as last resort
-For searchQuery url: https://www.google.com/search?q=[encoded query]
+Set artist.searchUrl to the literal string "spotify" (the client replaces it). Output searchUrls as three Google search URLs aligned with searchTrails.
+albumCover: prefer a real https://www.youtube.com/watch?v=... URL for the official music video when known; else null.
 
-Journal entry: ${entryText}`;
+Journal entry:
+---
+${entryText}
+---`;
 
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.88,
-                max_tokens: 4096
+                max_tokens: 6144
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (!parsed || typeof parsed !== 'object') throw new Error('Invalid model response.');
-            if (!parsed.artist?.name || !parsed.art?.name) {
-                throw new Error('Model response missing artist or art. Try again.');
+            if (!parsed.artist?.name || !parsed.art1?.name || !parsed.art2?.name) {
+                throw new Error('Model response missing artist, art1, or art2. Try again.');
             }
             return parsed;
-        }
-
-        function normalizeRecommendationUrls(rec) {
-            if (!rec || typeof rec !== 'object') return rec;
-            if (rec.artist && rec.artist.name && !String(rec.artist.searchUrl || '').includes('spotify')) {
-                rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(rec.artist.name)}`;
-            }
-            if (rec.searchQuery && rec.searchQuery.text && !String(rec.searchQuery.url || '').includes('google')) {
-                rec.searchQuery.url = `https://www.google.com/search?q=${encodeURIComponent(rec.searchQuery.text)}`;
-            }
-            return rec;
         }
 
         async function runVibeReshuffle(kind, avoidName) {
@@ -625,31 +701,40 @@ Journal entry: ${entryText}`;
                 vibeState.selected && vibeState.selected.filter(Boolean).length
                     ? JSON.stringify(vibeState.selected)
                     : '(Infer from journal and emotion only.)';
-            const slot = kind === 'artist' ? 'artist / song' : kind === 'art' ? 'art piece' : 'search query';
+            const slotLabel =
+                kind === 'artist'
+                    ? 'artist (name, song, albumCover, reason, searchUrl)'
+                    : kind === 'art1'
+                      ? 'art1 (must stay a different category than art2 after replacement)'
+                      : 'art2 (must stay a different category than art1 after replacement)';
             const currentJson = JSON.stringify(vibeState.rec);
-            const userPrompt = `Give a completely different ${slot} recommendation. Do not repeat this name/title: "${avoidName}". Use the same emotional routing.
+            const userPrompt = `CLOSE READING / micro-detail rules apply as in the main vibe task. Give a completely different ${slotLabel} recommendation. Do not repeat this title/name: "${avoidName}".
 
 Journal entry: ${entryText}
 Emotion: ${emotion}
 Vibe answers: ${vibeAnswersText}
 
-CURRENT full JSON (replace ONLY the "${kind}" branch; the other two branches must stay identical):
+CURRENT full JSON (replace ONLY the "${kind}" branch; keep every other key identical including nested objects):
 ${currentJson}
 
-Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as CURRENT).`;
+Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrails, searchUrls (same shapes as CURRENT full object).`;
 
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.95,
-                max_tokens: 3072
+                max_tokens: 6144
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (parsed && typeof parsed === 'object') {
+                if (parsed.primaryEmotion) vibeState.primaryEmotion = parsed.primaryEmotion;
                 vibeState.rec = {
                     artist: parsed.artist || vibeState.rec.artist,
-                    art: parsed.art || vibeState.rec.art,
-                    searchQuery: parsed.searchQuery || vibeState.rec.searchQuery
+                    art1: parsed.art1 || vibeState.rec.art1,
+                    art2: parsed.art2 || vibeState.rec.art2,
+                    searchTrails: parsed.searchTrails || vibeState.rec.searchTrails,
+                    searchUrls: parsed.searchUrls || vibeState.rec.searchUrls
                 };
+                normalizeRecommendationUrls(vibeState.rec);
             }
         }
 
@@ -657,56 +742,91 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             return '<div class="vibe-card-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>';
         }
 
+        function buildArtistHeroHtml(a) {
+            const albumCover = a.albumCover || '';
+            const artistName = a.name || '';
+            const vid = parseYoutubeVideoIdForArtist(albumCover);
+            if (vid) {
+                return `<div class="vibe-artist-hero"><iframe class="vibe-artist-iframe" src="https://www.youtube.com/embed/${vid}" title="Music video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>`;
+            }
+            if (albumCover && /^https?:\/\//i.test(albumCover)) {
+                if (/img\.youtube\.com/i.test(albumCover) || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(albumCover)) {
+                    return `<div class="vibe-artist-hero"><img class="vibe-artist-cover-img" src="${escapeHtml(albumCover)}" alt="" /></div>`;
+                }
+            }
+            const label = escapeHtml(artistName || 'This one');
+            return `<div class="vibe-artist-hero vibe-artist-hero--placeholder" aria-hidden="true"><span class="vibe-artist-placeholder-text">${label}</span></div>`;
+        }
+
         function renderResultsStep() {
             const r = vibeState.rec || {};
             const a = r.artist || {};
-            const art = r.art || {};
-            const sq = r.searchQuery || {};
+            const art1 = r.art1 || {};
+            const art2 = r.art2 || {};
+            const trails = Array.isArray(r.searchTrails) ? r.searchTrails : [];
+            const urls = Array.isArray(r.searchUrls) ? r.searchUrls : [];
             const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
+            const hero = buildArtistHeroHtml(a);
+            const songLine = escapeHtml(a.song || '—');
+            const nameMuted = escapeHtml(a.name || '');
+            const trailsHtml = [0, 1, 2]
+                .map((i) => {
+                    const t = trails[i] || '—';
+                    const u = urls[i] || `https://www.google.com/search?q=${encodeURIComponent(t)}`;
+                    return `<li class="vibe-trail-item"><a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t)}</a></li>`;
+                })
+                .join('');
             setVibeStage(`
                 ${emo}
                 <div class="vibe-results-stack">
-                    <div class="vibe-rec-card" data-card="artist">
+                    <div class="vibe-rec-card vibe-rec-card--artist" data-card="artist">
                         <button type="button" class="vibe-reshuffle" data-reshuffle="artist" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-artist-inner">
+                        <div class="vibe-card-inner vibe-card-inner--artist" id="vibe-card-artist-inner">
                             <p class="vibe-card-kicker">Artist</p>
-                            <p class="vibe-card-title">${escapeHtml(a.name || '—')}${a.song ? ` — <span class="vibe-song">${escapeHtml(a.song)}</span>` : ''}</p>
-                            <p class="vibe-card-body">${escapeHtml(a.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="listen">Listen</button>
+                            ${hero}
+                            <p class="vibe-artist-songline">${songLine}</p>
+                            <p class="vibe-artist-nameline">${nameMuted}</p>
+                            <p class="vibe-card-body vibe-card-body--friend">${escapeHtml(a.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="play">Play it</button>
                         </div>
                     </div>
-                    <div class="vibe-rec-card" data-card="art">
-                        <button type="button" class="vibe-reshuffle" data-reshuffle="art" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-art-inner">
-                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art.type || '')}</span></p>
-                            <p class="vibe-card-title">${escapeHtml(art.name || '—')}</p>
-                            <p class="vibe-card-body">${escapeHtml(art.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art">Find it</button>
+                    <div class="vibe-rec-card" data-card="art1">
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="art1" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-art1-inner">
+                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.type || '')}</span></p>
+                            <p class="vibe-card-title">${escapeHtml(art1.name || '—')}</p>
+                            <p class="vibe-card-body">${escapeHtml(art1.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">Find it</button>
                         </div>
                     </div>
-                    <div class="vibe-rec-card" data-card="search">
-                        <button type="button" class="vibe-reshuffle" data-reshuffle="search" title="Reshuffle">🔀</button>
-                        <div class="vibe-card-inner" id="vibe-card-search-inner">
-                            <p class="vibe-card-kicker">Search</p>
-                            <p class="vibe-card-title vibe-search-query">${escapeHtml(sq.text || '—')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="search">Go deeper</button>
+                    <div class="vibe-rec-card" data-card="art2">
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="art2" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-art2-inner">
+                            <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.type || '')}</span></p>
+                            <p class="vibe-card-title">${escapeHtml(art2.name || '—')}</p>
+                            <p class="vibe-card-body">${escapeHtml(art2.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">Find it</button>
                         </div>
                     </div>
                 </div>
+                <div class="vibe-search-trails-block">
+                    <p class="vibe-search-trails-label">Search trails</p>
+                    <ul class="vibe-search-trails-list">${trailsHtml}</ul>
+                </div>
                 <p class="vibe-error hidden" id="vibe-step2-err"></p>`);
 
-            const listenUrl = (vibeState.rec && vibeState.rec.artist && vibeState.rec.artist.searchUrl) || '';
-            const artUrl = (vibeState.rec && vibeState.rec.art && vibeState.rec.art.findUrl) || '';
-            const searchUrl = (vibeState.rec && vibeState.rec.searchQuery && vibeState.rec.searchQuery.url) || '';
+            const playUrl = (vibeState.rec && vibeState.rec.artist && vibeState.rec.artist.searchUrl) || '';
+            const art1Url = art1.findUrl || '';
+            const art2Url = art2.findUrl || '';
 
-            vibeStage.querySelector('[data-vibe-link="listen"]')?.addEventListener('click', () => {
-                if (listenUrl) window.open(listenUrl, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="play"]')?.addEventListener('click', () => {
+                if (playUrl) window.open(playUrl, '_blank', 'noopener,noreferrer');
             });
-            vibeStage.querySelector('[data-vibe-link="art"]')?.addEventListener('click', () => {
-                if (artUrl) window.open(artUrl, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="art1"]')?.addEventListener('click', () => {
+                if (art1Url) window.open(art1Url, '_blank', 'noopener,noreferrer');
             });
-            vibeStage.querySelector('[data-vibe-link="search"]')?.addEventListener('click', () => {
-                if (searchUrl) window.open(searchUrl, '_blank', 'noopener,noreferrer');
+            vibeStage.querySelector('[data-vibe-link="art2"]')?.addEventListener('click', () => {
+                if (art2Url) window.open(art2Url, '_blank', 'noopener,noreferrer');
             });
 
             vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
@@ -717,9 +837,9 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                     const prevName =
                         kind === 'artist'
                             ? String(vibeState.rec?.artist?.name || '')
-                            : kind === 'art'
-                              ? String(vibeState.rec?.art?.name || '')
-                              : String(vibeState.rec?.searchQuery?.text || '');
+                            : kind === 'art1'
+                              ? String(vibeState.rec?.art1?.name || '')
+                              : String(vibeState.rec?.art2?.name || '');
                     inner.innerHTML = cardSpinner();
                     const errEl = document.getElementById('vibe-step2-err');
                     if (errEl) errEl.classList.add('hidden');
@@ -728,10 +848,15 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                         const nextName =
                             kind === 'artist'
                                 ? String(vibeState.rec?.artist?.name || '')
-                                : kind === 'art'
-                                  ? String(vibeState.rec?.art?.name || '')
-                                  : String(vibeState.rec?.searchQuery?.text || '');
-                        const hist = kind === 'artist' ? vibeState.historyArtist : kind === 'art' ? vibeState.historyArt : vibeState.historySearch;
+                                : kind === 'art1'
+                                  ? String(vibeState.rec?.art1?.name || '')
+                                  : String(vibeState.rec?.art2?.name || '');
+                        const hist =
+                            kind === 'artist'
+                                ? vibeState.historyArtist
+                                : kind === 'art1'
+                                  ? vibeState.historyArt1
+                                  : vibeState.historyArt2;
                         if (hist.includes(nextName) || nextName === prevName) {
                             if (errEl) {
                                 errEl.textContent = 'Got a duplicate suggestion — try reshuffle again.';
@@ -739,8 +864,8 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                             }
                         } else {
                             if (kind === 'artist') vibeState.historyArtist.push(nextName);
-                            else if (kind === 'art') vibeState.historyArt.push(nextName);
-                            else vibeState.historySearch.push(nextName);
+                            else if (kind === 'art1') vibeState.historyArt1.push(nextName);
+                            else vibeState.historyArt2.push(nextName);
                         }
                         renderResultsStep();
                     } catch (e) {
@@ -769,8 +894,8 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
             vibeState.selected = [];
             vibeState.rec = null;
             vibeState.historyArtist = [];
-            vibeState.historyArt = [];
-            vibeState.historySearch = [];
+            vibeState.historyArt1 = [];
+            vibeState.historyArt2 = [];
             openVibePanel();
             setVibeStage(
                 '<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Matching your vibe to music & art…</p></div>'
@@ -780,12 +905,14 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 vibeState.primaryEmotion = full.primaryEmotion || '';
                 vibeState.rec = {
                     artist: full.artist,
-                    art: full.art,
-                    searchQuery: full.searchQuery
+                    art1: full.art1,
+                    art2: full.art2,
+                    searchTrails: full.searchTrails,
+                    searchUrls: full.searchUrls
                 };
                 vibeState.historyArtist = [String(vibeState.rec?.artist?.name || '')];
-                vibeState.historyArt = [String(vibeState.rec?.art?.name || '')];
-                vibeState.historySearch = [String(vibeState.rec?.searchQuery?.text || '')];
+                vibeState.historyArt1 = [String(vibeState.rec?.art1?.name || '')];
+                vibeState.historyArt2 = [String(vibeState.rec?.art2?.name || '')];
                 renderResultsStep();
             } catch (e) {
                 setVibeStage(

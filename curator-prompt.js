@@ -120,15 +120,48 @@ EMOTIONAL ROUTING RULES:
 - Match to the scene above that resonates emotionally, not just topically
 - A journal entry about heartbreak does NOT get Goonew just because it mentions streets — it gets Summrs or 03 Greedo
 - A journal entry about being chaotic and overstimulated gets Boolymon or Nettspend, not NBA YoungBoy
-- For ambiguous entries, let the follow-up questions clarify emotional register before recommending
+- For ambiguous entries, weigh emotional scene contrast carefully before recommending (micro-details in the entry beat generic themes)
 - Always explain WHY the emotion maps to this specific artist in the reason field — that explanation IS the value of the app
 
 ART MATCHING RULES:
 - Match art to the SAME emotional register as the music recommendation
-- Prioritize genuinely obscure finds: creative director portfolios, specific YouTube videos, interactive web art, photographer Instagram accounts, documentary short films
-- Name SPECIFIC works, not just artists. Not "Egon Schiele" but "Egon Schiele's Self-Portrait with Physalis, 1912"
-- Preferred creative directors to reference: John Ross (Nettspend/OsamaSon music videos), Cole Bennett/Lyrical Lemonade, Mowalola Ogunlesi (ØWay), Spike Jordan (UK underground visual work)
-- Interactive web art to draw from: Olia Lialina net art, patatap.com, radio.garden, theQuietPlace.xyz, windows93.net
+- NEVER recommend an article, essay, blog post, or written long-form piece for ART slots. Art must be interactive, watchable, or visually striking in under ~10 seconds of clicking: interactive sites, music videos (link via YouTube search), films/clips (YouTube or Vimeo search), paintings/photos (Google Arts & Culture search), generative web art, album-cover discovery (Google Image search), performance or fashion films (video search).
+- Name SPECIFIC works or experiences. Prefer search URLs over fragile deep links (see output contract).
+- Interactive sites you may ONLY name if they definitely exist: patatap.com, radio.garden, windows93.net, theQuietPlace.xyz, neal.fun, among others — never invent URLs.
 
 Respond ONLY in valid JSON. No markdown. No preamble. No backticks.`;
+}
+
+/** Appended to USER TASK for every vibe recommendation / reshuffle call. */
+export function buildVibeGroqOutputContract() {
+    return `
+OUTPUT CONTRACT — links, art types, and voice (mandatory):
+
+LINK SAFETY
+- Artist: The app will set Spotify to ONLY this pattern — you must still output searchUrl as the string "spotify" or leave it empty. Never output direct Spotify track/album URLs.
+- Art findUrl: ONLY stable patterns — YouTube search (https://www.youtube.com/results?search_query=...), Vimeo search (https://vimeo.com/search?q=...), Google Arts & Culture search (https://artsandculture.google.com/search?q=...), Archive.org search (https://archive.org/search?query=...), MoMA/Met/Tate collection or search URLs on their official domains, Google Image search for a named work (https://www.google.com/search?tbm=isch&q=...), OR a known interactive root domain you are certain exists (patatap.com, radio.garden, windows93.net, theQuietPlace.xyz, neal.fun). Do NOT link to news articles, Substacks, Medium, or generic blogs. Do NOT invent deep links to specific essay pages.
+
+ART PAIRING
+- art1 and art2 must both satisfy the ART rules above.
+- art2 must be a DIFFERENT category than art1 (e.g. if art1 is a music video, art2 must be a website, painting search, interactive piece, etc.).
+
+ARTIST FIELD albumCover
+- Prefer a real YouTube watch URL for the official music video (https://www.youtube.com/watch?v=...) so the UI can show a thumbnail or embed; if unknown, use null.
+
+ARTIST reason voice
+- Write reason in first-person casual voice as if texting a friend, e.g. starting with "this one goes hard for this — " then your tie-in.
+
+SEARCH TRAILS
+- searchTrails: exactly three highly specific query strings (not generic). Reference concrete phrases or scenes suggested by the journal.
+- searchUrls: three Google web search URLs: https://www.google.com/search?q=... (encoded), one per trail.
+
+CLOSE READING (most important)
+You are doing CLOSE READING of the journal entry, not summarizing. Find SPECIFIC DETAILS and match them to SPECIFIC moments in art and music — not general vibes.
+- Quote literal words and phrases from the entry in your reasons (in quotes).
+- Never boil the entry down to one abstract word — name 2–3 concrete details and map each to the recommendation.
+- For art, capture the TEXTURE of the feeling, not the category.
+- Apply this framework to artist, art1, art2, and to the specificity of searchTrails.
+
+Follow-up style (no separate step): phrase everything as if follow-up questions were micro-specific — reference their exact words in questions you imply, not generic prompts.
+`;
 }
