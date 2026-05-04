@@ -43,6 +43,16 @@ function youtubeHost(h) {
     return h === 'youtube.com' || h === 'm.youtube.com' || h === 'music.youtube.com';
 }
 
+/** Unique id per vibe run so Groq treats each journal click as a fresh curation. */
+function vibeSessionStamp() {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function isLikelyYoutubeVideoId(v) {
+    if (!v || typeof v !== 'string') return false;
+    return /^[\w-]{11}$/.test(v.trim());
+}
+
 function urlPassesArtFindPolicy(url) {
     if (!url || typeof url !== 'string') return false;
     try {
@@ -51,8 +61,20 @@ function urlPassesArtFindPolicy(url) {
         if (youtubeHost(h)) {
             if (u.pathname.startsWith('/results')) return true;
             if (u.searchParams.has('search_query')) return true;
+            if (u.pathname === '/watch' && isLikelyYoutubeVideoId(u.searchParams.get('v') || '')) return true;
+            if (u.pathname.startsWith('/shorts/')) {
+                const id = u.pathname.replace(/^\/shorts\//, '').split('/')[0];
+                return isLikelyYoutubeVideoId(id);
+            }
         }
-        if (h === 'vimeo.com' && u.pathname.startsWith('/search')) return true;
+        if (u.hostname === 'youtu.be') {
+            const id = u.pathname.replace(/^\//, '').split('/')[0];
+            return isLikelyYoutubeVideoId(id);
+        }
+        if (h === 'vimeo.com') {
+            if (u.pathname.startsWith('/search')) return true;
+            if (/^\/\d+(?:\/|$)/.test(u.pathname)) return true;
+        }
         if (h === 'artsandculture.google.com') return true;
         if (h === 'archive.org') return true;
         if (h === 'google.com' && (u.searchParams.get('tbm') === 'isch' || u.pathname.startsWith('/search')))
@@ -61,6 +83,7 @@ function urlPassesArtFindPolicy(url) {
         if (museums.some((m) => h === m || h.endsWith('.' + m))) return true;
         const knownLive = ['patatap.com', 'radio.garden', 'windows93.net', 'thequietplace.xyz', 'neal.fun'];
         if (knownLive.includes(h)) return true;
+        if (h === 'instagram.com' && /^\/(p|reel|tv)\/[\w-]+/.test(u.pathname)) return true;
         return false;
     } catch {
         return false;
@@ -70,30 +93,9 @@ function urlPassesArtFindPolicy(url) {
 function coerceArtFindUrl(art) {
     if (!art || typeof art !== 'object') return;
     const q = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
-    let url = String(art.findUrl || '').trim();
-    try {
-        if (url) {
-            const u = new URL(url);
-            const h = u.hostname.replace(/^www\./, '');
-            const isYtWatch =
-                u.hostname === 'youtu.be' ||
-                (youtubeHost(h) && (u.pathname === '/watch' || u.pathname.startsWith('/shorts/')));
-            if (isYtWatch) {
-                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
-                return;
-            }
-            if (h === 'vimeo.com' && u.pathname.startsWith('/search')) return;
-            if (h === 'vimeo.com' && /^\/\d+/.test(u.pathname)) {
-                art.findUrl = `https://vimeo.com/search?q=${encodeURIComponent(q)}`;
-                return;
-            }
-        }
-    } catch {
-        /* ignore */
-    }
-    if (!urlPassesArtFindPolicy(url)) {
-        art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
-    }
+    const url = String(art.findUrl || '').trim();
+    if (url && urlPassesArtFindPolicy(url)) return;
+    art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
 }
 
 function normalizeRecommendationUrls(rec) {
@@ -902,7 +904,10 @@ const initApp = async () => {
         }
 
         async function runVibeJournalToRecommendations(entryText) {
-            const userPrompt = `Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). You MUST output artist.song as a real released track (exact title) that exists on streaming for that artist — never invent titles. art2 type ≠ art1.
+            const session = vibeSessionStamp();
+            const userPrompt = `CURATION SESSION: ${session} — This is a new run (new journal or new click). Do not repeat boilerplate picks from prior turns; surface fresh music + art. Lean niche / weird / underground visual culture per system prompt.
+
+Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). You MUST output artist.song as a real released track (exact title) that exists on streaming for that artist — never invent titles. art2 type ≠ art1.
 
 JSON shape:
 {"primaryEmotion":"","artist":{"name":"","song":"","albumCover":null,"songYoutubeUrl":null,"songSoundcloudUrl":null,"reason":"","searchUrl":"spotify"},"art1":{"name":"","type":"","reason":"","findUrl":""},"art2":{"name":"","type":"","reason":"","findUrl":""},"searchTrails":["","",""],"searchUrls":["","",""]}
@@ -914,7 +919,7 @@ ${entryText}
 
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
-                temperature: 0.88,
+                temperature: 0.93,
                 max_tokens: 4096
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
@@ -943,7 +948,10 @@ ${entryText}
                       ? 'art1 (must stay a different category than art2 after replacement)'
                       : 'art2 (must stay a different category than art1 after replacement)';
             const currentJson = compactVibeRecForPrompt(vibeState.rec);
-            const userPrompt = `Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming); reasons journal-only.
+            const session = vibeSessionStamp();
+            const userPrompt = `RESHUFFLE SESSION: ${session} — Fresh alternative required (not a repeat of common defaults).
+
+Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming); reasons journal-only.
 
 Journal: ${entryText}
 Emotion: ${emotion}
