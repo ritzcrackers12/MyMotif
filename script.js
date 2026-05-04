@@ -48,9 +48,31 @@ function vibeSessionStamp() {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-function isLikelyYoutubeVideoId(v) {
-    if (!v || typeof v !== 'string') return false;
-    return /^[\w-]{11}$/.test(v.trim());
+/** Portfolio, fashion editorial, creative hosts allowed for art findUrl (no YouTube — music uses artist.songYoutubeUrl). */
+function creativePortfolioHost(h) {
+    const roots = [
+        'behance.net',
+        'artstation.com',
+        'carbonmade.com',
+        'readymag.com',
+        'cargo.site',
+        'are.na',
+        'dribbble.com',
+        'awwwards.com',
+        'artsy.net',
+        'saatchiart.com',
+        'wikiart.org',
+        'ssense.com',
+        'vogue.com',
+        '1stdibs.com',
+        'highsnobiety.com'
+    ];
+    for (const r of roots) {
+        if (h === r || h.endsWith('.' + r)) return true;
+    }
+    if (h.endsWith('.github.io')) return true;
+    if (h === 'glitch.me' || h.endsWith('.glitch.me')) return true;
+    return false;
 }
 
 function urlPassesArtFindPolicy(url) {
@@ -58,19 +80,7 @@ function urlPassesArtFindPolicy(url) {
     try {
         const u = new URL(url);
         const h = u.hostname.replace(/^www\./, '');
-        if (youtubeHost(h)) {
-            if (u.pathname.startsWith('/results')) return true;
-            if (u.searchParams.has('search_query')) return true;
-            if (u.pathname === '/watch' && isLikelyYoutubeVideoId(u.searchParams.get('v') || '')) return true;
-            if (u.pathname.startsWith('/shorts/')) {
-                const id = u.pathname.replace(/^\/shorts\//, '').split('/')[0];
-                return isLikelyYoutubeVideoId(id);
-            }
-        }
-        if (u.hostname === 'youtu.be') {
-            const id = u.pathname.replace(/^\//, '').split('/')[0];
-            return isLikelyYoutubeVideoId(id);
-        }
+        if (youtubeHost(h) || u.hostname === 'youtu.be') return false;
         if (h === 'vimeo.com') {
             if (u.pathname.startsWith('/search')) return true;
             if (/^\/\d+(?:\/|$)/.test(u.pathname)) return true;
@@ -84,6 +94,7 @@ function urlPassesArtFindPolicy(url) {
         const knownLive = ['patatap.com', 'radio.garden', 'windows93.net', 'thequietplace.xyz', 'neal.fun'];
         if (knownLive.includes(h)) return true;
         if (h === 'instagram.com' && /^\/(p|reel|tv)\/[\w-]+/.test(u.pathname)) return true;
+        if (creativePortfolioHost(h)) return true;
         return false;
     } catch {
         return false;
@@ -93,9 +104,23 @@ function urlPassesArtFindPolicy(url) {
 function coerceArtFindUrl(art) {
     if (!art || typeof art !== 'object') return;
     const q = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
-    const url = String(art.findUrl || '').trim();
+    let url = String(art.findUrl || '').trim();
+    try {
+        if (url) {
+            const u = new URL(url);
+            const h = u.hostname.replace(/^www\./, '');
+            if (youtubeHost(h) || u.hostname === 'youtu.be') {
+                art.findUrl = '';
+                url = '';
+            }
+        }
+    } catch {
+        art.findUrl = '';
+        url = '';
+    }
+    url = String(art.findUrl || '').trim();
     if (url && urlPassesArtFindPolicy(url)) return;
-    art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+    art.findUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
 function normalizeRecommendationUrls(rec) {
@@ -868,7 +893,7 @@ const initApp = async () => {
         }
 
         /** Truncate long reasons in reshuffle payload to save input tokens. */
-        function compactVibeRecForPrompt(rec, maxReasonChars = 200) {
+        function compactVibeRecForPrompt(rec, maxReasonChars = 320) {
             if (!rec || typeof rec !== 'object') return '{}';
             const cut = (s) => {
                 const t = String(s ?? '');
@@ -905,9 +930,9 @@ const initApp = async () => {
 
         async function runVibeJournalToRecommendations(entryText) {
             const session = vibeSessionStamp();
-            const userPrompt = `CURATION SESSION: ${session} — This is a new run (new journal or new click). Do not repeat boilerplate picks from prior turns; surface fresh music + art. Lean niche / weird / underground visual culture per system prompt.
+            const userPrompt = `CURATION SESSION: ${session} — This is a new run. Picks must be **justified** by the journal (not random); follow system prompt for reason format.
 
-Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). You MUST output artist.song as a real released track (exact title) that exists on streaming for that artist — never invent titles. art2 type ≠ art1.
+Close-read the journal: each \`reason\` cites their specifics and explains why that suggestion fits **this** entry. For music: do not open with the song title or quote lyrics. You MUST output artist.song as a real released track (exact title) on streaming — never invent titles. Art findUrl: **no YouTube** (music video belongs in artist.songYoutubeUrl only). art2 type ≠ art1.
 
 JSON shape:
 {"primaryEmotion":"","artist":{"name":"","song":"","albumCover":null,"songYoutubeUrl":null,"songSoundcloudUrl":null,"reason":"","searchUrl":"spotify"},"art1":{"name":"","type":"","reason":"","findUrl":""},"art2":{"name":"","type":"","reason":"","findUrl":""},"searchTrails":["","",""],"searchUrls":["","",""]}
@@ -919,7 +944,7 @@ ${entryText}
 
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
-                temperature: 0.93,
+                temperature: 0.86,
                 max_tokens: 4096
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
@@ -951,7 +976,7 @@ ${entryText}
             const session = vibeSessionStamp();
             const userPrompt = `RESHUFFLE SESSION: ${session} — Fresh alternative required (not a repeat of common defaults).
 
-Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming); reasons journal-only.
+Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming). Reasons = journal specifics + why this fits (see system prompt). Art findUrl = no YouTube.
 
 Journal: ${entryText}
 Emotion: ${emotion}
