@@ -1,10 +1,9 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // MyMotif: each signed-in user reads/writes only their own workspace document.
-    // App path: doc(db, "boards", auth.currentUser.uid)
-    match /boards/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId;
     }
   }
 }

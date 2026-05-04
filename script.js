@@ -1,11 +1,6 @@
 import {
     auth,
     db,
-    storage,
-    ref,
-    uploadBytes,
-    getDownloadURL,
-    getBlob,
     provider,
     signInWithPopup,
     signInWithRedirect,
@@ -18,13 +13,29 @@ import {
     inMemoryPersistence,
     doc,
     setDoc,
-    getDoc
+    getDoc,
+    collection,
+    getDocs
 } from './firebase.js';
+import { buildCuratorSystemPrompt } from './curator-prompt.js';
 
-/** Default Gemini key for this app (public in client; restrict in Google Cloud via HTTP referrers). */
+/** Default Gemini key (restrict in Google Cloud via HTTP referrers). */
 const MYMOTIF_DEFAULT_GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
 
-/** Private / strict browsers often reject IndexedDB "local" persistence; fall back so sign-in still sticks for the tab. */
+const WORKSPACE_BOARD_ID = 'default';
+
+function workspaceDoc(uid) {
+    return doc(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID);
+}
+
+function frameEntryDoc(uid, frameId) {
+    return doc(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID, 'frames', frameId);
+}
+
+function framesCollection(uid) {
+    return collection(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID, 'frames');
+}
+
 async function ensureAuthPersistence() {
     const tiers = [
         ['local', browserLocalPersistence],
@@ -42,13 +53,73 @@ async function ensureAuthPersistence() {
     }
 }
 
+function stashJournalSnapshotsBeforeHistory() {
+    const canvas = document.getElementById('canvas');
+    if (!canvas) return;
+    canvas.querySelectorAll('.motif-frame').forEach((fr) => {
+        const ta = fr.querySelector('.journal-entry-textarea');
+        if (ta) fr.setAttribute('data-journal-snapshot', encodeURIComponent(ta.value));
+    });
+}
+
+function restoreJournalSnapshotsAfterInnerHtml() {
+    const canvas = document.getElementById('canvas');
+    if (!canvas) return;
+    canvas.querySelectorAll('.motif-frame[data-journal-snapshot]').forEach((fr) => {
+        const raw = fr.getAttribute('data-journal-snapshot');
+        const ta = fr.querySelector('.journal-entry-textarea');
+        if (ta && raw) {
+            try {
+                ta.value = decodeURIComponent(raw);
+            } catch {
+                /* ignore */
+            }
+        }
+    });
+}
+
+function extractGeminiText(data) {
+    const parts = data?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+        return parts
+            .filter((p) => p && typeof p.text === 'string')
+            .map((p) => p.text)
+            .join('');
+    }
+    const alt = data?.content;
+    if (Array.isArray(alt)) {
+        return alt
+            .filter((block) => block && block.type === 'text' && block.text)
+            .map((block) => block.text)
+            .join('');
+    }
+    return '';
+}
+
+function parseGeminiJsonFromResponse(data) {
+    const text = extractGeminiText(data);
+    const clean = String(text)
+        .replace(/^\uFEFF/, '')
+        .replace(/```json/gi, '')
+        .replace(/```/g, '')
+        .trim();
+    try {
+        return JSON.parse(clean);
+    } catch (firstErr) {
+        const start = clean.indexOf('{');
+        const end = clean.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return JSON.parse(clean.slice(start, end + 1));
+        }
+        throw firstErr;
+    }
+}
+
 const initApp = async () => {
     try {
-        console.log("My Motif: Starting Robust Boot...");
+        console.log('My Motif: Starting journal build…');
         const boardContainer = document.getElementById('board-container');
         const canvas = document.getElementById('canvas');
-        const ghostFrame = document.getElementById('ghost-frame');
-        const globalFileInput = document.getElementById('global-file-input');
         const landingPage = document.getElementById('landing-page');
         const userIconBtn = document.querySelector('.login-trigger');
         const saveCloudBtn = document.getElementById('save-cloud-btn');
@@ -56,7 +127,7 @@ const initApp = async () => {
         const loginBtn = document.getElementById('login-google-btn');
 
         if (!boardContainer || !canvas || !landingPage) {
-            throw new Error("Missing board DOM (#board-container, #canvas, or #landing-page).");
+            throw new Error('Missing board DOM (#board-container, #canvas, or #landing-page).');
         }
 
         await ensureAuthPersistence();
@@ -74,82 +145,93 @@ const initApp = async () => {
 
         let cloudSaveTimer = null;
 
-        /** Each signed-in user only reads/writes Firestore `boards/{theirUid}` (see firestore.rules in repo). */
+        async function persistFrameEntriesToCloud() {
+            if (!auth.currentUser) return;
+            const uid = auth.currentUser.uid;
+            const frames = canvas.querySelectorAll('.motif-frame');
+            for (const fr of frames) {
+                const fid = fr.id;
+                if (!fid) continue;
+                const ta = fr.querySelector('.journal-entry-textarea');
+                const entry = ta ? ta.value.trim() : '';
+                await setDoc(frameEntryDoc(uid, fid), { entry, updatedAt: new Date() }, { merge: true });
+            }
+        }
+
         async function persistBoardToCloud({ silent = false } = {}) {
             if (!auth.currentUser) return;
-            document.querySelectorAll("#canvas input").forEach((inp) => inp.setAttribute("value", inp.value));
-            let ghostHtml = "";
-            const ghost = document.getElementById("ghost-frame");
+            document.querySelectorAll('#canvas input').forEach((inp) => inp.setAttribute('value', inp.value));
+            stashJournalSnapshotsBeforeHistory();
+            let ghostHtml = '';
+            const ghost = document.getElementById('ghost-frame');
             if (ghost && ghost.parentNode === canvas) {
                 canvas.removeChild(ghost);
                 ghostHtml = ghost.outerHTML;
             }
-            const imgSrcRestore = [];
-            canvas.querySelectorAll('.motif-image-node img[data-download-url]').forEach((im) => {
-                const src = (im.getAttribute('src') || '').trim();
-                const dl = (im.getAttribute('data-download-url') || '').trim();
-                if (!dl.startsWith('https://')) return;
-                if (src.startsWith('blob:') || src.startsWith('data:image')) {
-                    imgSrcRestore.push({ im, src });
-                    im.setAttribute('src', dl);
-                }
-            });
             try {
                 await setDoc(
-                    doc(db, "boards", auth.currentUser.uid),
+                    workspaceDoc(auth.currentUser.uid),
                     {
                         canvasHTML: canvas.innerHTML,
                         updatedAt: new Date()
                     },
                     { merge: true }
                 );
+                await persistFrameEntriesToCloud();
             } finally {
-                imgSrcRestore.forEach(({ im, src }) => im.setAttribute('src', src));
                 if (ghostHtml) canvas.innerHTML = ghostHtml + canvas.innerHTML;
+                restoreJournalSnapshotsAfterInnerHtml();
             }
         }
 
-        /** Firestore stores HTTPS download URLs on <img>; after load, replace with SDK-backed blob: for display. */
-        async function rehydrateMotifImagesAfterCloudLoad() {
-            if (!auth.currentUser) return;
-            const nodes = canvas.querySelectorAll('.motif-image-node[data-storage-path]');
-            for (const node of nodes) {
-                const path = (node.getAttribute('data-storage-path') || '').trim();
-                if (!path.startsWith('boards/')) continue;
-                const img = node.querySelector('img');
-                if (!img) continue;
-                let dl = (img.getAttribute('data-download-url') || '').trim();
-                if (!dl) {
-                    const legacy = (node.getAttribute('data-storage-url') || '').trim();
-                    if (legacy.startsWith('https://')) {
-                        dl = legacy;
-                        img.setAttribute('data-download-url', legacy);
-                    }
-                }
-                const curBefore = (img.getAttribute('src') || '').trim();
+        async function hydrateFrameEntriesFromFirestore(uid) {
+            try {
+                const snap = await getDocs(framesCollection(uid));
+                snap.forEach((d) => {
+                    const fr = document.getElementById(d.id);
+                    const ta = fr && fr.querySelector('.journal-entry-textarea');
+                    if (ta && typeof d.data().entry === 'string') ta.value = d.data().entry;
+                });
+            } catch (e) {
+                console.warn('MyMotif: could not load frame entries:', e && (e.code || e.message));
+            }
+        }
+
+        async function loadWorkspaceForUser(uid) {
+            let snap = await getDoc(workspaceDoc(uid));
+            let exists = typeof snap.exists === 'function' ? snap.exists() : snap.exists;
+            let data = snap.data();
+            if (!exists || !data?.canvasHTML) {
                 try {
-                    const blob = await getBlob(ref(storage, path));
-                    if (curBefore.startsWith('blob:')) {
-                        try {
-                            URL.revokeObjectURL(curBefore);
-                        } catch {
-                            /* ignore */
-                        }
+                    const legacy = await getDoc(doc(db, 'boards', uid));
+                    const legEx = typeof legacy.exists === 'function' ? legacy.exists() : legacy.exists;
+                    const legData = legacy.data();
+                    if (legEx && legData?.canvasHTML) {
+                        await setDoc(
+                            workspaceDoc(uid),
+                            { canvasHTML: legData.canvasHTML, updatedAt: new Date(), migratedFromLegacyBoardsDoc: true },
+                            { merge: true }
+                        );
+                        snap = await getDoc(workspaceDoc(uid));
+                        exists = typeof snap.exists === 'function' ? snap.exists() : snap.exists;
+                        data = snap.data();
                     }
-                    img.src = URL.createObjectURL(blob);
-                } catch (err) {
-                    console.warn(
-                        'MyMotif: could not rehydrate image from Storage:',
-                        path,
-                        err && (err.code || err.message)
-                    );
-                    const cur = (img.getAttribute('src') || '').trim();
-                    if (cur.startsWith('data:image')) return;
-                    if (cur.startsWith('https://') && cur.includes('firebasestorage')) return;
-                    if (dl.startsWith('https://')) {
-                        img.src = dl;
-                    }
+                } catch {
+                    /* legacy path may be denied by new rules */
                 }
+            }
+            if (exists && data && data.canvasHTML) {
+                const temp = document.createElement('div');
+                temp.innerHTML = data.canvasHTML;
+                const ghost = document.getElementById('ghost-frame');
+                if (ghost) temp.prepend(ghost);
+                canvas.innerHTML = temp.innerHTML;
+                document.querySelectorAll('#canvas input').forEach((inp) => {
+                    if (inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
+                });
+                restoreJournalSnapshotsAfterInnerHtml();
+                await hydrateFrameEntriesFromFirestore(uid);
+                wireAllJournalFrames();
             }
         }
 
@@ -158,61 +240,22 @@ const initApp = async () => {
             if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
             cloudSaveTimer = setTimeout(() => {
                 cloudSaveTimer = null;
-                persistBoardToCloud({ silent: true }).catch((err) => console.warn("Auto-save:", err));
+                persistBoardToCloud({ silent: true }).catch((err) => console.warn('Auto-save:', err));
             }, 2800);
         }
 
-        /** Run Analysis when each image is backed by Storage (path + persisted download URL; display may be blob:). */
-        function syncFrameRunButton(frameEl) {
-            if (!frameEl || !frameEl.classList.contains('motif-frame')) return;
-            const runBtn = frameEl.querySelector('.run-btn');
-            if (!runBtn) return;
-            const imgs = frameEl.querySelectorAll('.motif-image-node img');
-            if (imgs.length === 0) {
-                runBtn.classList.remove('ready');
-                return;
-            }
-            const allFromStorage = [...imgs].every((im) => {
-                const node = im.closest('.motif-image-node');
-                const path = (node?.getAttribute('data-storage-path') || '').trim();
-                if (!path.startsWith('boards/')) return false;
-                const u = (im.getAttribute('src') || '').trim();
-                const dl = (im.getAttribute('data-download-url') || '').trim();
-                const hasDl =
-                    dl.startsWith('https://') &&
-                    (dl.includes('firebasestorage.googleapis.com') || dl.includes('firebasestorage.app'));
-                if (!hasDl) {
-                    const legacy = (node?.getAttribute('data-storage-url') || '').trim();
-                    if (legacy.startsWith('https://') && legacy.includes('firebasestorage')) return true;
-                }
-                if (hasDl && u.startsWith('blob:')) return true;
-                if (hasDl && u.startsWith('data:image')) return true;
-                if (
-                    u.startsWith('https://firebasestorage.googleapis.com') ||
-                    (u.startsWith('https://') && u.includes('firebasestorage'))
-                ) {
-                    return true;
-                }
-                return false;
-            });
-            if (allFromStorage) runBtn.classList.add('ready');
-            else runBtn.classList.remove('ready');
-        }
-
-        document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "hidden" && auth.currentUser) {
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden' && auth.currentUser) {
                 if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
                 persistBoardToCloud({ silent: true }).catch(() => {});
             }
         });
 
-        // --- AUTH STATE OBSERVER (single listener) ---
         onAuthStateChanged(auth, async (user) => {
-            console.log("Auth State Changed:", user ? "Logged In" : "Logged Out");
+            console.log('Auth State Changed:', user ? 'Logged In' : 'Logged Out');
             if (user) {
                 landingPage.classList.add('hidden');
                 landingPage.style.display = 'none';
-                
                 if (userIconBtn) {
                     const av = user.photoURL;
                     userIconBtn.innerHTML = av
@@ -221,10 +264,9 @@ const initApp = async () => {
                     userIconBtn.title = `Logged in as ${user.displayName || user.email || 'Google'} (click to sign out)`;
                 }
                 if (saveCloudBtn) saveCloudBtn.style.display = 'block';
-                
                 try {
                     await setDoc(
-                        doc(db, "boards", user.uid),
+                        workspaceDoc(user.uid),
                         {
                             userProfile: {
                                 displayName: user.displayName || null,
@@ -236,38 +278,9 @@ const initApp = async () => {
                         },
                         { merge: true }
                     );
-
-                    const docSnap = await getDoc(doc(db, "boards", user.uid));
-                    const snapExists =
-                        typeof docSnap.exists === "function" ? docSnap.exists() : docSnap.exists;
-                    const data = docSnap.data();
-                    if (snapExists && data && data.canvasHTML) {
-                        const temp = document.createElement("div");
-                        temp.innerHTML = data.canvasHTML;
-                        const ghost = document.getElementById("ghost-frame");
-                        if (ghost) temp.prepend(ghost);
-                        canvas.innerHTML = temp.innerHTML;
-                        document.querySelectorAll("#canvas input").forEach((inp) => {
-                            if (inp.hasAttribute("value")) inp.value = inp.getAttribute("value");
-                        });
-                        rehydrateAnalysisCardsFromDom();
-                        await rehydrateMotifImagesAfterCloudLoad();
-                        canvas.querySelectorAll('.frame-body').forEach(ensureFrameUploadLabel);
-                        canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
-                    }
+                    await loadWorkspaceForUser(user.uid);
                 } catch (e) {
-                    console.error("Load Error:", e);
-                    const msg = String(e && e.message || e);
-                    if (e?.code === "permission-denied") {
-                        console.warn(
-                            "MyMotif: Firestore permission denied. Deploy rules in firestore.rules (boards/{userId} read/write only for request.auth.uid == userId)."
-                        );
-                    }
-                    if (e?.code === "unavailable" || e?.code === "not-found" || msg.includes("not-found") || msg.includes("offline")) {
-                        console.warn(
-                            "MyMotif: Cloud Firestore is not reachable. In Firebase Console open project \"mymotiffinal\" → Build → Firestore Database → Create database (if you have not). Then publish rules that allow signed-in users to read/write documents under boards/{theirUid}."
-                        );
-                    }
+                    console.error('Load Error:', e);
                 }
             } else {
                 landingPage.classList.remove('hidden');
@@ -282,31 +295,30 @@ const initApp = async () => {
 
         let isSigningIn = false;
         async function doGoogleSignIn(e) {
-            if (e) { e.preventDefault(); e.stopPropagation(); }
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             if (isSigningIn) return;
             isSigningIn = true;
-            
             try {
-                console.log("Initiating Popup Auth...");
                 await ensureAuthPersistence();
                 const result = await signInWithPopup(auth, provider);
                 if (result.user) {
-                    console.log("Login Success!");
                     landingPage.classList.add('hidden');
                     landingPage.style.display = 'none';
                 }
             } catch (error) {
-                console.error("Auth Error:", error);
                 const code = error && error.code;
                 if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
                     try {
                         await ensureAuthPersistence();
                         await signInWithRedirect(auth, provider);
                     } catch (e2) {
-                        alert("Login Error: " + (e2.code || e2.message));
+                        alert('Login Error: ' + (e2.code || e2.message));
                     }
                 } else {
-                    alert("Login Error: " + (code || error.message));
+                    alert('Login Error: ' + (code || error.message));
                 }
             } finally {
                 isSigningIn = false;
@@ -318,11 +330,11 @@ const initApp = async () => {
         if (userIconBtn) {
             userIconBtn.addEventListener('click', async (e) => {
                 if (auth.currentUser) {
-                    if (!confirm("Sign out? Your board will be saved to the cloud first.")) return;
+                    if (!confirm('Sign out? Your board will be saved to the cloud first.')) return;
                     try {
                         await persistBoardToCloud({ silent: true });
                     } catch (err) {
-                        console.warn("Save before sign-out:", err);
+                        console.warn('Save before sign-out:', err);
                     }
                     await signOut(auth);
                     location.reload();
@@ -332,308 +344,653 @@ const initApp = async () => {
             });
         }
 
+        const winGeminiOverride =
+            typeof window !== 'undefined' &&
+            typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
+            window.MYMOTIF_GEMINI_API_KEY.trim();
+        const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
+        const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
-    
-    let currentTool = 'select'; // 'select', 'pan', 'frame', 'board'
+        const GEMINI_FETCH_TIMEOUT_MS = 75000;
 
-    let scale = 1;
-    let panX = window.innerWidth / 2;
-    let panY = window.innerHeight / 2;
+        function geminiCandidateHasText(data) {
+            const parts = data?.candidates?.[0]?.content?.parts;
+            if (!Array.isArray(parts)) return false;
+            return parts.some((p) => typeof p.text === 'string' && p.text.trim().length > 0);
+        }
 
-    updateCanvasTransform();
-
-    // Toolbar Logic
-    const toolBtns = document.querySelectorAll('.tool-btn');
-    toolBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            toolBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            currentTool = btn.dataset.tool;
-            
-            if (currentTool === 'frame' || currentTool === 'board') {
-                boardContainer.style.cursor = 'crosshair';
-            } else if (currentTool === 'pan') {
-                boardContainer.style.cursor = 'grab';
-            } else if (currentTool === 'comment') {
-                boardContainer.style.cursor = 'crosshair';
-            } else if (currentTool === 'context') {
-                boardContainer.style.cursor = 'crosshair';
-            } else {
-                boardContainer.style.cursor = 'default';
+        async function geminiGenerateContent(requestBody) {
+            let lastMessage = '';
+            const maxAttempts = 4;
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+                let response;
+                try {
+                    response = await fetch(GEMINI_GENERATE_CONTENT_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody),
+                        signal: controller.signal
+                    });
+                } catch (e) {
+                    clearTimeout(timer);
+                    lastMessage = e && e.name === 'AbortError' ? 'Request timed out.' : String(e.message || e);
+                    break;
+                }
+                clearTimeout(timer);
+                const data = await response.json().catch(() => ({}));
+                if (data.promptFeedback?.blockReason) {
+                    lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
+                    break;
+                }
+                const c0 = data.candidates?.[0];
+                if (response.ok && c0 && geminiCandidateHasText(data)) return data;
+                lastMessage = data.error?.message || `HTTP ${response.status}`;
+                const is429 =
+                    response.status === 429 ||
+                    data.error?.status === 'RESOURCE_EXHAUSTED' ||
+                    /quota|exceeded|Resource exhausted/i.test(lastMessage);
+                if (is429 && attempt < maxAttempts - 1) {
+                    await new Promise((r) => setTimeout(r, 12000));
+                    continue;
+                }
+                break;
             }
-        });
-    });
+            throw new Error(lastMessage || 'Gemini request failed.');
+        }
 
-    function setTool(toolName) {
-        toolBtns.forEach(btn => {
-            if(btn.dataset.tool === toolName) btn.click();
-        });
-    }
+        function escapeHtml(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
 
-    // Zooming
-    boardContainer.addEventListener('wheel', (e) => {
-        if(e.target.closest('.analysis-card')) return;
-        e.preventDefault(); 
-        
-        if (e.ctrlKey || e.metaKey || e.deltaY % 1 !== 0) {
-            const zoomSensitivity = 0.005;
-            const delta = -e.deltaY * zoomSensitivity;
-            const newScale = Math.min(Math.max(0.1, scale + delta), 5);
-            
-            const mouseX = e.clientX;
-            const mouseY = e.clientY;
-            
-            panX = mouseX - (mouseX - panX) * (newScale / scale);
-            panY = mouseY - (mouseY - panY) * (newScale / scale);
-            scale = newScale;
-        } else {
-            panX -= e.deltaX;
-            panY -= e.deltaY;
+        /** --- Vibe panel (slide-in from right) --- */
+        const vibeOverlay = document.createElement('div');
+        vibeOverlay.id = 'vibe-panel-overlay';
+        vibeOverlay.className = 'vibe-panel-overlay hidden';
+        vibeOverlay.innerHTML = `
+            <div class="vibe-panel-backdrop" data-vibe-close="1"></div>
+            <aside class="vibe-panel-drawer" role="dialog" aria-modal="true" aria-label="Vibe finder">
+                <div class="vibe-panel-header">
+                    <h2 class="vibe-panel-title">Find your vibe</h2>
+                    <button type="button" class="vibe-panel-close icon-btn" title="Close" data-vibe-close="1"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="vibe-panel-body" id="vibe-panel-stage"></div>
+                <p class="vibe-panel-footer-note">Art lives everywhere. These are starting points.</p>
+            </aside>`;
+        document.body.appendChild(vibeOverlay);
+
+        const vibeStage = vibeOverlay.querySelector('#vibe-panel-stage');
+        vibeOverlay.addEventListener('click', (e) => {
+            if (e.target.closest('[data-vibe-close="1"]')) closeVibePanel();
+        });
+
+        const vibeState = {
+            frame: null,
+            entry: '',
+            primaryEmotion: '',
+            questions: [],
+            selected: [],
+            rec: null,
+            historyArtist: [],
+            historyArt: [],
+            historySearch: []
+        };
+
+        function openVibePanel() {
+            vibeOverlay.classList.remove('hidden');
+        }
+
+        function closeVibePanel() {
+            vibeOverlay.classList.add('hidden');
+            vibeStage.innerHTML = '';
+        }
+
+        function setVibeStage(html) {
+            vibeStage.innerHTML = html;
+        }
+
+        async function runGeminiStep1Questions(entryText) {
+            const userPrompt = `Read this journal entry and identify the primary emotion. Then generate exactly 3 follow-up questions to sharpen your understanding of the emotional and aesthetic vibe. Questions should feel visceral and instinctive, not clinical — like a friend asking, not a therapist.
+Each question has exactly 3 short answer options.
+
+Return ONLY this JSON, nothing else:
+{
+  "primaryEmotion": string,
+  "questions": [
+    { "question": string, "options": [string, string, string] }
+  ]
+}
+
+Journal entry: ${entryText}`;
+
+            const body = {
+                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
+                contents: [{ parts: [{ text: userPrompt }] }],
+                generationConfig: {
+                    temperature: 0.9,
+                    maxOutputTokens: 2048,
+                    responseMimeType: 'application/json'
+                }
+            };
+            const data = await geminiGenerateContent(body);
+            const parsed = parseGeminiJsonFromResponse(data);
+            return parsed;
+        }
+
+        function normalizeRecommendationUrls(rec) {
+            if (!rec || typeof rec !== 'object') return rec;
+            if (rec.artist && rec.artist.name && !String(rec.artist.searchUrl || '').includes('spotify')) {
+                rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(rec.artist.name)}`;
+            }
+            if (rec.searchQuery && rec.searchQuery.text && !String(rec.searchQuery.url || '').includes('google')) {
+                rec.searchQuery.url = `https://www.google.com/search?q=${encodeURIComponent(rec.searchQuery.text)}`;
+            }
+            return rec;
+        }
+
+        async function runGeminiStep2Recommendations(entryText, emotion, vibeAnswersText) {
+            const userPrompt = `Based on this journal entry, identified emotion, and vibe answers, give exactly ONE of each. Route using the emotional scene map.
+
+ARTIST: One specific artist or song from your taste universe that matches the emotional register of this entry. Explain in 2 sentences why THIS specific emotional world fits. Include artist name and a specific song.
+
+ART: One piece of art from ANYWHERE — a famous painting, a YouTube video, an interactive website, a SoundCloud track, a film scene, a mural, a creative director's portfolio, a music video, a documentary short. Prioritize obscure and hard-to-find. Name the SPECIFIC work. Explain in 2 sentences why this emotional world matches.
+
+SEARCH: One specific search query to find more like this.
+
+Return ONLY this JSON, nothing else:
+{
+  "artist": {
+    "name": string,
+    "song": string | null,
+    "reason": string,
+    "searchUrl": string
+  },
+  "art": {
+    "name": string,
+    "type": string,
+    "reason": string,
+    "findUrl": string
+  },
+  "searchQuery": {
+    "text": string,
+    "url": string
+  }
+}
+
+For searchUrl: https://open.spotify.com/search/[encoded artist name]
+For findUrl: most specific URL possible — direct link, YouTube search, or Google search as last resort
+For searchQuery url: https://www.google.com/search?q=[encoded query]
+
+Journal entry: ${entryText}
+Identified emotion: ${emotion}
+Vibe answers: ${vibeAnswersText}`;
+
+            const body = {
+                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
+                contents: [{ parts: [{ text: userPrompt }] }],
+                generationConfig: {
+                    temperature: 0.85,
+                    maxOutputTokens: 3072,
+                    responseMimeType: 'application/json'
+                }
+            };
+            const data = await geminiGenerateContent(body);
+            return normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+        }
+
+        async function runGeminiReshuffle(kind, avoidName) {
+            const entryText = vibeState.entry;
+            const emotion = vibeState.primaryEmotion;
+            const vibeAnswersText = JSON.stringify(vibeState.selected);
+            const slot = kind === 'artist' ? 'artist / song' : kind === 'art' ? 'art piece' : 'search query';
+            const currentJson = JSON.stringify(vibeState.rec);
+            const userPrompt = `Give a completely different ${slot} recommendation. Do not repeat this name/title: "${avoidName}". Use the same emotional routing.
+
+Journal entry: ${entryText}
+Emotion: ${emotion}
+Vibe answers: ${vibeAnswersText}
+
+CURRENT full JSON (replace ONLY the "${kind}" branch; the other two branches must stay identical):
+${currentJson}
+
+Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as CURRENT).`;
+
+            const body = {
+                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
+                contents: [{ parts: [{ text: userPrompt }] }],
+                generationConfig: {
+                    temperature: 0.95,
+                    maxOutputTokens: 3072,
+                    responseMimeType: 'application/json'
+                }
+            };
+            const data = await geminiGenerateContent(body);
+            const parsed = normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+            if (parsed && typeof parsed === 'object') {
+                vibeState.rec = {
+                    artist: parsed.artist || vibeState.rec.artist,
+                    art: parsed.art || vibeState.rec.art,
+                    searchQuery: parsed.searchQuery || vibeState.rec.searchQuery
+                };
+            }
+        }
+
+        function renderQuestionsStep() {
+            const em = escapeHtml(vibeState.primaryEmotion || '');
+            let qHtml = '';
+            (vibeState.questions || []).forEach((q, qi) => {
+                const opts = (q.options || []).slice(0, 3);
+                const optBtns = opts
+                    .map(
+                        (o, oi) =>
+                            `<button type="button" class="vibe-option-btn" data-qix="${qi}" data-oix="${oi}">${escapeHtml(o)}</button>`
+                    )
+                    .join('');
+                qHtml += `<div class="vibe-q-block"><p class="vibe-q-text">${escapeHtml(q.question || '')}</p><div class="vibe-option-row">${optBtns}</div></div>`;
+            });
+            setVibeStage(`
+                <p class="vibe-emotion-label"><em>${em}</em></p>
+                ${qHtml}
+                <p class="vibe-error hidden" id="vibe-step1-err"></p>
+                <button type="button" class="primary-btn vibe-continue-btn" id="vibe-continue-btn">Continue</button>`);
+
+            vibeStage.querySelectorAll('.vibe-option-btn').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const qi = parseInt(btn.getAttribute('data-qix'), 10);
+                    const oi = parseInt(btn.getAttribute('data-oix'), 10);
+                    if (!vibeState.selected) vibeState.selected = [];
+                    vibeState.selected[qi] = (vibeState.questions[qi].options || [])[oi] || '';
+                    btn.parentElement.querySelectorAll('.vibe-option-btn').forEach((b) => b.classList.remove('selected'));
+                    btn.classList.add('selected');
+                });
+            });
+
+            document.getElementById('vibe-continue-btn').addEventListener('click', async () => {
+                const errEl = document.getElementById('vibe-step1-err');
+                const nq = (vibeState.questions || []).length;
+                if (nq < 2 || vibeState.selected.filter(Boolean).length < nq) {
+                    errEl.textContent = 'Pick one answer for each question.';
+                    errEl.classList.remove('hidden');
+                    return;
+                }
+                errEl.classList.add('hidden');
+                const btn = document.getElementById('vibe-continue-btn');
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Finding recommendations…';
+                try {
+                    const rec = await runGeminiStep2Recommendations(
+                        vibeState.entry,
+                        vibeState.primaryEmotion,
+                        JSON.stringify(vibeState.selected)
+                    );
+                    vibeState.rec = rec;
+                    vibeState.historyArtist = [String(rec?.artist?.name || '')];
+                    vibeState.historyArt = [String(rec?.art?.name || '')];
+                    vibeState.historySearch = [String(rec?.searchQuery?.text || '')];
+                    renderResultsStep();
+                } catch (e) {
+                    errEl.textContent = e.message || String(e);
+                    errEl.classList.remove('hidden');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Continue';
+                }
+            });
+        }
+
+        function cardSpinner() {
+            return '<div class="vibe-card-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>';
+        }
+
+        function renderResultsStep() {
+            const r = vibeState.rec || {};
+            const a = r.artist || {};
+            const art = r.art || {};
+            const sq = r.searchQuery || {};
+            setVibeStage(`
+                <div class="vibe-results-stack">
+                    <div class="vibe-rec-card" data-card="artist">
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="artist" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-artist-inner">
+                            <p class="vibe-card-kicker">Artist</p>
+                            <p class="vibe-card-title">${escapeHtml(a.name || '—')}${a.song ? ` — <span class="vibe-song">${escapeHtml(a.song)}</span>` : ''}</p>
+                            <p class="vibe-card-body">${escapeHtml(a.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="listen">Listen</button>
+                        </div>
+                    </div>
+                    <div class="vibe-rec-card" data-card="art">
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="art" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-art-inner">
+                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art.type || '')}</span></p>
+                            <p class="vibe-card-title">${escapeHtml(art.name || '—')}</p>
+                            <p class="vibe-card-body">${escapeHtml(art.reason || '')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art">Find it</button>
+                        </div>
+                    </div>
+                    <div class="vibe-rec-card" data-card="search">
+                        <button type="button" class="vibe-reshuffle" data-reshuffle="search" title="Reshuffle">🔀</button>
+                        <div class="vibe-card-inner" id="vibe-card-search-inner">
+                            <p class="vibe-card-kicker">Search</p>
+                            <p class="vibe-card-title vibe-search-query">${escapeHtml(sq.text || '—')}</p>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="search">Go deeper</button>
+                        </div>
+                    </div>
+                </div>
+                <p class="vibe-error hidden" id="vibe-step2-err"></p>`);
+
+            const listenUrl = (vibeState.rec && vibeState.rec.artist && vibeState.rec.artist.searchUrl) || '';
+            const artUrl = (vibeState.rec && vibeState.rec.art && vibeState.rec.art.findUrl) || '';
+            const searchUrl = (vibeState.rec && vibeState.rec.searchQuery && vibeState.rec.searchQuery.url) || '';
+
+            vibeStage.querySelector('[data-vibe-link="listen"]')?.addEventListener('click', () => {
+                if (listenUrl) window.open(listenUrl, '_blank', 'noopener,noreferrer');
+            });
+            vibeStage.querySelector('[data-vibe-link="art"]')?.addEventListener('click', () => {
+                if (artUrl) window.open(artUrl, '_blank', 'noopener,noreferrer');
+            });
+            vibeStage.querySelector('[data-vibe-link="search"]')?.addEventListener('click', () => {
+                if (searchUrl) window.open(searchUrl, '_blank', 'noopener,noreferrer');
+            });
+
+            vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
+                b.addEventListener('click', async () => {
+                    const kind = b.getAttribute('data-reshuffle');
+                    const card = b.closest('.vibe-rec-card');
+                    const inner = card.querySelector('.vibe-card-inner');
+                    const prevName =
+                        kind === 'artist'
+                            ? String(vibeState.rec?.artist?.name || '')
+                            : kind === 'art'
+                              ? String(vibeState.rec?.art?.name || '')
+                              : String(vibeState.rec?.searchQuery?.text || '');
+                    inner.innerHTML = cardSpinner();
+                    const errEl = document.getElementById('vibe-step2-err');
+                    if (errEl) errEl.classList.add('hidden');
+                    try {
+                        await runGeminiReshuffle(kind, prevName);
+                        const nextName =
+                            kind === 'artist'
+                                ? String(vibeState.rec?.artist?.name || '')
+                                : kind === 'art'
+                                  ? String(vibeState.rec?.art?.name || '')
+                                  : String(vibeState.rec?.searchQuery?.text || '');
+                        const hist = kind === 'artist' ? vibeState.historyArtist : kind === 'art' ? vibeState.historyArt : vibeState.historySearch;
+                        if (hist.includes(nextName) || nextName === prevName) {
+                            if (errEl) {
+                                errEl.textContent = 'Got a duplicate suggestion — try reshuffle again.';
+                                errEl.classList.remove('hidden');
+                            }
+                        } else {
+                            if (kind === 'artist') vibeState.historyArtist.push(nextName);
+                            else if (kind === 'art') vibeState.historyArt.push(nextName);
+                            else vibeState.historySearch.push(nextName);
+                        }
+                        renderResultsStep();
+                    } catch (e) {
+                        if (errEl) {
+                            errEl.textContent = e.message || String(e);
+                            errEl.classList.remove('hidden');
+                        }
+                        renderResultsStep();
+                    }
+                });
+            });
+        }
+
+        async function startFindMyVibe(frameEl) {
+            if (!auth.currentUser) {
+                alert('Sign in to save your journal and run vibe finder.');
+                return;
+            }
+            const ta = frameEl.querySelector('.journal-entry-textarea');
+            const entry = (ta && ta.value.trim()) || '';
+            if (!entry) {
+                alert('Write something in your journal first.');
+                return;
+            }
+            vibeState.frame = frameEl;
+            vibeState.entry = entry.slice(0, 500);
+            vibeState.selected = [];
+            vibeState.rec = null;
+            vibeState.historyArtist = [];
+            vibeState.historyArt = [];
+            vibeState.historySearch = [];
+            openVibePanel();
+            setVibeStage('<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Reading your entry…</p></div>');
+            try {
+                const step1 = await runGeminiStep1Questions(vibeState.entry);
+                vibeState.primaryEmotion = step1.primaryEmotion || '';
+                vibeState.questions = Array.isArray(step1.questions) ? step1.questions.slice(0, 3) : [];
+                if (vibeState.questions.length < 2) throw new Error('Model returned too few questions. Try again.');
+                renderQuestionsStep();
+            } catch (e) {
+                setVibeStage(
+                    `<div class="vibe-error-panel"><p>${escapeHtml(e.message || String(e))}</p><button type="button" class="primary-btn" id="vibe-retry">Try again</button></div>`
+                );
+                document.getElementById('vibe-retry').addEventListener('click', () => startFindMyVibe(frameEl));
+            }
+        }
+
+        function bindJournalFrame(frameEl) {
+            const ta = frameEl.querySelector('.journal-entry-textarea');
+            const cnt = frameEl.querySelector('.journal-char-count');
+            const btn = frameEl.querySelector('.find-vibe-btn');
+            if (!ta || !cnt || !btn) return;
+            const syncCount = () => {
+                const n = ta.value.length;
+                cnt.textContent = n + ' / 500';
+                if (n > 500) ta.value = ta.value.slice(0, 500);
+            };
+            ta.addEventListener('input', () => {
+                syncCount();
+                scheduleCloudSave();
+            });
+            syncCount();
+            btn.addEventListener('click', () => void startFindMyVibe(frameEl));
+        }
+
+        function wireAllJournalFrames() {
+            canvas.querySelectorAll('.motif-frame').forEach(bindJournalFrame);
+        }
+
+        let currentTool = 'select';
+        let scale = 1;
+        let panX = window.innerWidth / 2;
+        let panY = window.innerHeight / 2;
+
+        function updateCanvasTransform() {
+            canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
         }
         updateCanvasTransform();
-    }, { passive: false });
 
-    function updateCanvasTransform() {
-        canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
-    }
-
-    const historyStack = [];
-
-    const getGhostFrame = () => document.getElementById('ghost-frame');
-    const getGlobalFileInput = () => document.getElementById('global-file-input');
-
-    function saveStateSafe() {
-        const ghost = getGhostFrame();
-        document.querySelectorAll('#canvas input').forEach(inp => {
-            inp.setAttribute('value', inp.value);
+        const toolBtns = document.querySelectorAll('.tool-btn');
+        toolBtns.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                toolBtns.forEach((b) => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentTool = btn.dataset.tool;
+                if (currentTool === 'frame' || currentTool === 'board') boardContainer.style.cursor = 'crosshair';
+                else if (currentTool === 'pan') boardContainer.style.cursor = 'grab';
+                else boardContainer.style.cursor = 'default';
+            });
         });
-        
-        if (ghost && ghost.parentNode === canvas) {
-            canvas.removeChild(ghost);
+
+        function setTool(toolName) {
+            toolBtns.forEach((btn) => {
+                if (btn.dataset.tool === toolName) btn.click();
+            });
         }
-        
-        historyStack.push(canvas.innerHTML);
-        if (historyStack.length > 30) historyStack.shift();
-        
-        if (ghost) canvas.prepend(ghost);
-        scheduleCloudSave();
-    }
 
-    function undoSafe() {
-        const ghost = getGhostFrame();
-        if (historyStack.length > 0) {
-            if (ghost && ghost.parentNode === canvas) {
-                canvas.removeChild(ghost);
-            }
-            canvas.innerHTML = historyStack.pop();
-            if (ghost) canvas.prepend(ghost);
-            deselectAll();
-            canvas.querySelectorAll('.motif-frame').forEach(syncFrameRunButton);
-        }
-        scheduleCloudSave();
-    }
-
-
-    // Keyboard Shortcuts (Delete & Undo)
-    document.addEventListener('keydown', (e) => {
-        // Undo: Cmd+Z or Ctrl+Z
-        if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        boardContainer.addEventListener('wheel', (e) => {
             e.preventDefault();
-            undoSafe();
-            return;
-        }
-
-        // Tool Shortcuts (only if not typing)
-        if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-            if (e.key.toLowerCase() === 'v') setTool('select');
-            if (e.key.toLowerCase() === 'b') setTool('board');
-            if (e.key.toLowerCase() === 'f') setTool('frame');
-            if (e.key.toLowerCase() === 'c') setTool('comment');
-        }
-
-
-        // Delete / Backspace
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-            // Don't delete if we are typing in an input
-            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
-                return;
-            }
-            
-            const selectedElements = document.querySelectorAll('.selected');
-            if (selectedElements.length > 0) {
-                saveStateSafe();
-                const framesToSync = new Set();
-                selectedElements.forEach((el) => {
-                    const fr = el.closest('.motif-frame');
-                    if (fr) framesToSync.add(fr);
-                    el.remove();
-                });
-                framesToSync.forEach(syncFrameRunButton);
-            }
-        }
-    });
-
-    // Ensure input changes are tracked
-    boardContainer.addEventListener('input', e => {
-        if (e.target.tagName === 'INPUT') {
-            e.target.setAttribute('value', e.target.value);
-        }
-    });
-
-
-    // --- UNIFIED DRAG / DRAW STATE ---
-    let isPanning = false;
-    let isDrawing = false;
-    let dragType = null; // 'move' or 'resize'
-    let draggingElement = null; 
-    let dragStartX, dragStartY;
-    let initialLeft, initialTop, initialWidth, initialHeight;
-    let activeFrameForUpload = null;
-    let stateSavedForDrag = false;
-    let containedElementsToMove = []; // Re-added for grouped board dragging
-    let lastMousedownTime = 0;
-
-    boardContainer.addEventListener(
-        'pointerdown',
-        (e) => {
-            if (e.target.closest('.top-toolbar')) return;
-            const lab = e.target.closest('.frame-upload-label');
-            if (lab) {
-                activeFrameForUpload = lab.closest('.motif-frame');
-            }
-        },
-        true
-    );
-
-    boardContainer.addEventListener('mousedown', (e) => {
-        if (e.target.closest('.top-toolbar')) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const pointerX = (e.clientX - rect.left) / scale;
-        const pointerY = (e.clientY - rect.top) / scale;
-
-        const now = Date.now();
-        const isDoubleClick = (now - lastMousedownTime < 300);
-        lastMousedownTime = now;
-
-        const individualDragHandle = e.target.closest('.individual-drag-handle');
-
-        // If the hand (pan) tool is active, double click triggers an individual move. 
-        // OR if they grabbed the explicit drag dot.
-        let executeIndividualMove = (currentTool === 'pan' && isDoubleClick) || !!individualDragHandle;
-
-        // Standard pan logic (only if we aren't doing the double-click individual move)
-        if ((currentTool === 'pan' && !isDoubleClick) || e.button === 1 || e.code === 'Space') {
-            isPanning = true;
-            dragStartX = e.clientX - panX;
-            dragStartY = e.clientY - panY;
-            boardContainer.style.cursor = 'grabbing';
-            return;
-        }
-
-        if (currentTool === 'frame' || currentTool === 'board') {
-            isDrawing = true;
-            dragStartX = pointerX;
-            dragStartY = pointerY;
-            
-            const ghost = getGhostFrame();
-            ghost.style.display = 'block';
-            ghost.style.left = dragStartX + 'px';
-            ghost.style.top = dragStartY + 'px';
-            ghost.style.width = '0px';
-            ghost.style.height = '0px';
-            if (currentTool === 'board') {
-                ghost.style.borderStyle = 'dashed';
-                ghost.style.background = 'rgba(243, 244, 246, 0.4)';
+            if (e.ctrlKey || e.metaKey || e.deltaY % 1 !== 0) {
+                const zoomSensitivity = 0.005;
+                const delta = -e.deltaY * zoomSensitivity;
+                const newScale = Math.min(Math.max(0.1, scale + delta), 5);
+                const mouseX = e.clientX;
+                const mouseY = e.clientY;
+                panX = mouseX - (mouseX - panX) * (newScale / scale);
+                panY = mouseY - (mouseY - panY) * (newScale / scale);
+                scale = newScale;
             } else {
-                ghost.style.borderStyle = 'solid';
-                ghost.style.background = 'rgba(107, 92, 231, 0.1)';
+                panX -= e.deltaX;
+                panY -= e.deltaY;
             }
+            updateCanvasTransform();
+        }, { passive: false });
 
-            
-            deselectAll();
-            return;
+        const historyStack = [];
+        const getGhostFrame = () => document.getElementById('ghost-frame');
+
+        function saveStateSafe() {
+            stashJournalSnapshotsBeforeHistory();
+            const ghost = getGhostFrame();
+            document.querySelectorAll('#canvas input').forEach((inp) => inp.setAttribute('value', inp.value));
+            if (ghost && ghost.parentNode === canvas) canvas.removeChild(ghost);
+            historyStack.push(canvas.innerHTML);
+            if (historyStack.length > 30) historyStack.shift();
+            if (ghost) canvas.prepend(ghost);
+            restoreJournalSnapshotsAfterInnerHtml();
+            scheduleCloudSave();
         }
 
-        const deleteBtn = e.target.closest('.delete-btn');
-        if (deleteBtn) {
-            const parentEl = deleteBtn.closest('.motif-frame, .motif-board, .analysis-card');
-            if (parentEl) {
-                saveStateSafe();
-                parentEl.remove();
+        function undoSafe() {
+            const ghost = getGhostFrame();
+            if (historyStack.length > 0) {
+                if (ghost && ghost.parentNode === canvas) canvas.removeChild(ghost);
+                canvas.innerHTML = historyStack.pop();
+                if (ghost) canvas.prepend(ghost);
+                deselectAll();
+                restoreJournalSnapshotsAfterInnerHtml();
+                wireAllJournalFrames();
             }
-            return;
+            scheduleCloudSave();
         }
 
-        const runBtn = e.target.closest('.run-btn');
-        if (runBtn) {
-            const parentNode = runBtn.closest('.motif-frame, .motif-board');
-            if (parentNode) runAnalysis(parentNode);
-            return;
-        }
-
-        if (currentTool === 'comment') {
-            const imgNode = e.target.closest('.motif-image-node');
-            if (imgNode) {
-                openCommentModal(imgNode);
+        document.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+                e.preventDefault();
+                undoSafe();
                 return;
             }
-        }
+            if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+                if (e.key.toLowerCase() === 'v') setTool('select');
+                if (e.key.toLowerCase() === 'b') setTool('board');
+                if (e.key.toLowerCase() === 'f') setTool('frame');
+            }
+            if (e.key === 'Backspace' || e.key === 'Delete') {
+                if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+                const selectedElements = document.querySelectorAll('.selected');
+                if (selectedElements.length > 0) {
+                    saveStateSafe();
+                    selectedElements.forEach((el) => el.remove());
+                }
+            }
+        });
 
-        if (currentTool === 'context') {
-            const ctxFrame = e.target.closest('.motif-frame');
-            if (ctxFrame) openContextModal(ctxFrame);
-            return;
-        }
+        boardContainer.addEventListener('input', (e) => {
+            if (e.target.tagName === 'INPUT') e.target.setAttribute('value', e.target.value);
+            if (e.target.classList.contains('journal-entry-textarea')) {
+                const fr = e.target.closest('.motif-frame');
+                if (fr) fr.setAttribute('data-journal-snapshot', encodeURIComponent(e.target.value));
+            }
+        });
 
-        if (currentTool === 'select' || currentTool === 'comment' || executeIndividualMove) {
-            const imageResizeHandle = e.target.closest('.image-resize-handle');
-            const imageNode = e.target.closest('.motif-image-node');
-            
+        let isPanning = false;
+        let isDrawing = false;
+        let dragType = null;
+        let draggingElement = null;
+        let dragStartX, dragStartY;
+        let initialLeft, initialTop, initialWidth, initialHeight;
+        let stateSavedForDrag = false;
+        let containedElementsToMove = [];
+        let lastMousedownTime = 0;
+
+        boardContainer.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.top-toolbar')) return;
+            if (e.target.closest('#vibe-panel-overlay')) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const pointerX = (e.clientX - rect.left) / scale;
+            const pointerY = (e.clientY - rect.top) / scale;
+            const now = Date.now();
+            const isDoubleClick = now - lastMousedownTime < 300;
+            lastMousedownTime = now;
+            const individualDragHandle = e.target.closest('.individual-drag-handle');
+            let executeIndividualMove = (currentTool === 'pan' && isDoubleClick) || !!individualDragHandle;
+
+            if ((currentTool === 'pan' && !isDoubleClick) || e.button === 1 || e.code === 'Space') {
+                isPanning = true;
+                dragStartX = e.clientX - panX;
+                dragStartY = e.clientY - panY;
+                boardContainer.style.cursor = 'grabbing';
+                return;
+            }
+
+            if (currentTool === 'frame' || currentTool === 'board') {
+                isDrawing = true;
+                dragStartX = pointerX;
+                dragStartY = pointerY;
+                const ghost = getGhostFrame();
+                ghost.style.display = 'block';
+                ghost.style.left = dragStartX + 'px';
+                ghost.style.top = dragStartY + 'px';
+                ghost.style.width = '0px';
+                ghost.style.height = '0px';
+                if (currentTool === 'board') {
+                    ghost.style.borderStyle = 'dashed';
+                    ghost.style.background = 'rgba(243, 244, 246, 0.4)';
+                } else {
+                    ghost.style.borderStyle = 'solid';
+                    ghost.style.background = 'rgba(107, 92, 231, 0.1)';
+                }
+                deselectAll();
+                return;
+            }
+
+            const deleteBtn = e.target.closest('.delete-btn');
+            if (deleteBtn) {
+                const parentEl = deleteBtn.closest('.motif-frame, .motif-board');
+                if (parentEl) {
+                    saveStateSafe();
+                    parentEl.remove();
+                }
+                return;
+            }
+
             const frameResizeHandle = e.target.closest('.frame-resize-handle');
             const frameHeader = e.target.closest('.frame-header');
             const frameBody = e.target.closest('.frame-body');
             const frame = e.target.closest('.motif-frame');
-            
             const boardResizeHandle = e.target.closest('.board-resize-handle');
             const boardHeader = e.target.closest('.board-header');
             const board = e.target.closest('.motif-board');
-            
-            const cardHeader = e.target.closest('.card-header');
-            const analysisCard = e.target.closest('.analysis-card');
 
-            if (e.target.tagName === 'INPUT') {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.closest('.journal-entry-textarea')) {
                 if (frame) selectElement(frame, 'frame');
                 if (board) selectElement(board, 'board');
                 return;
             }
 
             if (individualDragHandle) {
-                const parentElement = individualDragHandle.closest('.motif-frame, .motif-board, .analysis-card, .motif-image-node');
+                const parentElement = individualDragHandle.closest('.motif-frame, .motif-board');
                 if (parentElement) {
                     startDrag(e, parentElement, 'move', pointerX, pointerY, true);
-                    selectElement(parentElement, parentElement.className.split(' ')[0].replace('motif-', ''));
+                    selectElement(parentElement, parentElement.classList.contains('motif-frame') ? 'frame' : 'board');
                 }
-            } else if (imageResizeHandle) {
-                startDrag(e, imageNode, 'resize', pointerX, pointerY, executeIndividualMove);
-            } else if (imageNode) {
-                startDrag(e, imageNode, 'move', pointerX, pointerY, executeIndividualMove);
-                selectElement(imageNode, 'image');
             } else if (frameResizeHandle) {
                 startDrag(e, frame, 'resize', pointerX, pointerY, executeIndividualMove);
             } else if (frameHeader) {
                 startDrag(e, frame, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(frame, 'frame');
-            } else if (
-                frameBody &&
-                frame &&
-                !imageNode &&
-                !e.target.closest('.motif-image-node') &&
-                !e.target.closest('.frame-upload-label')
-            ) {
+            } else if (frameBody && frame) {
                 selectElement(frame, 'frame');
-                activeFrameForUpload = frame;
-                globalFileInput.click();
             } else if (frame) {
                 selectElement(frame, 'frame');
             } else if (boardResizeHandle) {
@@ -641,1338 +998,243 @@ const initApp = async () => {
             } else if (boardHeader) {
                 startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(board, 'board');
-            } else if (board && !e.target.closest('.motif-frame') && !e.target.closest('.analysis-card')) {
+            } else if (board && !e.target.closest('.motif-frame')) {
                 startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
                 selectElement(board, 'board');
-            } else if (cardHeader) {
-                startDrag(e, analysisCard, 'move', pointerX, pointerY, executeIndividualMove);
-                selectElement(analysisCard, 'card');
-            } else if (analysisCard) {
-                selectElement(analysisCard, 'card');
-            } else {
-                deselectAll();
-            }
-        }
-    });
+            } else deselectAll();
+        });
 
-    function startDrag(e, element, type, px, py, isDoubleClickDrag = false) {
-        draggingElement = element;
-        dragType = type;
-        dragStartX = px;
-        dragStartY = py;
-        stateSavedForDrag = false; // Will save on first pixel moved
-        
-        initialLeft = parseFloat(element.style.left) || 0;
-        initialTop = parseFloat(element.style.top) || 0;
-        initialWidth = parseFloat(element.style.width) || element.offsetWidth;
-        initialHeight = parseFloat(element.style.height) || element.offsetHeight;
-        
-        containedElementsToMove = [];
-        
-        // Group Logic: Single click moves all, Double click moves individually
-        if (type === 'move' && !isDoubleClickDrag) {
-            let boardContext = null;
-            
-            if (element.classList.contains('motif-board')) {
-                boardContext = element;
-            } else if (element.classList.contains('motif-frame') || element.classList.contains('analysis-card')) {
-                // If a frame/card was clicked, check if it is sitting on a board
-                const cx = initialLeft + initialWidth / 2;
-                const cy = initialTop + initialHeight / 2;
-                
-                document.querySelectorAll('.motif-board').forEach(b => {
-                    const bx = parseFloat(b.style.left);
-                    const by = parseFloat(b.style.top);
-                    const bw = parseFloat(b.style.width) || b.offsetWidth;
-                    const bh = parseFloat(b.style.height) || b.offsetHeight;
-                    if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) {
-                        boardContext = b;
-                    }
-                });
-            }
-
-            if (boardContext) {
-                // Override the drag to move the entire board and its contents
-                draggingElement = boardContext;
-                initialLeft = parseFloat(boardContext.style.left) || 0;
-                initialTop = parseFloat(boardContext.style.top) || 0;
-                initialWidth = parseFloat(boardContext.style.width) || boardContext.offsetWidth;
-                initialHeight = parseFloat(boardContext.style.height) || boardContext.offsetHeight;
-                
-                containedElementsToMove = getContainedNodes(boardContext).map(el => {
-                    return { el, left: parseFloat(el.style.left), top: parseFloat(el.style.top) };
-                });
-                
-                // Visually show the board is selected to indicate grouped drag
-                selectElement(boardContext, 'board');
-            }
-        }
-        
-        e.stopPropagation();
-    }
-
-    window.addEventListener('mousemove', (e) => {
-        if (isPanning) {
-            panX = e.clientX - dragStartX;
-            panY = e.clientY - dragStartY;
-            updateCanvasTransform();
-            return;
+        function getContainedNodes(boardEl) {
+            const contained = [];
+            const bx = parseFloat(boardEl.style.left);
+            const by = parseFloat(boardEl.style.top);
+            const bw = parseFloat(boardEl.style.width);
+            const bh = parseFloat(boardEl.style.height);
+            document.querySelectorAll('.motif-frame').forEach((node) => {
+                const nx = parseFloat(node.style.left);
+                const ny = parseFloat(node.style.top);
+                const nw = parseFloat(node.style.width) || node.offsetWidth;
+                const nh = parseFloat(node.style.height) || node.offsetHeight;
+                const cx = nx + nw / 2;
+                const cy = ny + nh / 2;
+                if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) contained.push(node);
+            });
+            return contained;
         }
 
-        const rect = canvas.getBoundingClientRect();
-        const pointerX = (e.clientX - rect.left) / scale;
-        const pointerY = (e.clientY - rect.top) / scale;
-
-        if (isDrawing) {
-            const width = Math.abs(pointerX - dragStartX);
-            const height = Math.abs(pointerY - dragStartY);
-            const left = Math.min(pointerX, dragStartX);
-            const top = Math.min(pointerY, dragStartY);
-            
-            const ghost = getGhostFrame();
-            ghost.style.left = left + 'px';
-            ghost.style.top = top + 'px';
-            ghost.style.width = width + 'px';
-            ghost.style.height = height + 'px';
-
-            return;
-        }
-
-        if (draggingElement && dragType) {
-            const dx = pointerX - dragStartX;
-            const dy = pointerY - dragStartY;
-            
-            if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-                if (!stateSavedForDrag) {
-                    saveStateSafe();
-                    stateSavedForDrag = true;
+        function startDrag(e, element, type, px, py, isDoubleClickDrag = false) {
+            draggingElement = element;
+            dragType = type;
+            dragStartX = px;
+            dragStartY = py;
+            stateSavedForDrag = false;
+            initialLeft = parseFloat(element.style.left) || 0;
+            initialTop = parseFloat(element.style.top) || 0;
+            initialWidth = parseFloat(element.style.width) || element.offsetWidth;
+            initialHeight = parseFloat(element.style.height) || element.offsetHeight;
+            containedElementsToMove = [];
+            if (type === 'move' && !isDoubleClickDrag) {
+                let boardContext = null;
+                if (element.classList.contains('motif-board')) boardContext = element;
+                else if (element.classList.contains('motif-frame')) {
+                    const cx = initialLeft + initialWidth / 2;
+                    const cy = initialTop + initialHeight / 2;
+                    document.querySelectorAll('.motif-board').forEach((b) => {
+                        const bx = parseFloat(b.style.left);
+                        const by = parseFloat(b.style.top);
+                        const bw = parseFloat(b.style.width) || b.offsetWidth;
+                        const bh = parseFloat(b.style.height) || b.offsetHeight;
+                        if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) boardContext = b;
+                    });
+                }
+                if (boardContext) {
+                    draggingElement = boardContext;
+                    initialLeft = parseFloat(boardContext.style.left) || 0;
+                    initialTop = parseFloat(boardContext.style.top) || 0;
+                    initialWidth = parseFloat(boardContext.style.width) || boardContext.offsetWidth;
+                    initialHeight = parseFloat(boardContext.style.height) || boardContext.offsetHeight;
+                    containedElementsToMove = getContainedNodes(boardContext).map((el) => ({
+                        el,
+                        left: parseFloat(el.style.left),
+                        top: parseFloat(el.style.top)
+                    }));
+                    selectElement(boardContext, 'board');
                 }
             }
-            
-            if (dragType === 'move') {
-                draggingElement.style.left = (initialLeft + dx) + 'px';
-                draggingElement.style.top = (initialTop + dy) + 'px';
-                
-                // Move contained elements together with the board
-                containedElementsToMove.forEach(item => {
-                    item.el.style.left = (item.left + dx) + 'px';
-                    item.el.style.top = (item.top + dy) + 'px';
-                });
-            } else if (dragType === 'resize') {
-                if (draggingElement.classList.contains('motif-image-node')) {
-                    const ratio = initialWidth / initialHeight;
-                    const newWidth = Math.max(50, initialWidth + dx);
-                    draggingElement.style.width = newWidth + 'px';
-                    draggingElement.style.height = (newWidth / ratio) + 'px';
-                } else {
+            e.stopPropagation();
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                panX = e.clientX - dragStartX;
+                panY = e.clientY - dragStartY;
+                updateCanvasTransform();
+                return;
+            }
+            const rect = canvas.getBoundingClientRect();
+            const pointerX = (e.clientX - rect.left) / scale;
+            const pointerY = (e.clientY - rect.top) / scale;
+            if (isDrawing) {
+                const ghost = getGhostFrame();
+                const width = Math.abs(pointerX - dragStartX);
+                const height = Math.abs(pointerY - dragStartY);
+                const left = Math.min(pointerX, dragStartX);
+                const top = Math.min(pointerY, dragStartY);
+                ghost.style.left = left + 'px';
+                ghost.style.top = top + 'px';
+                ghost.style.width = width + 'px';
+                ghost.style.height = height + 'px';
+                return;
+            }
+            if (draggingElement && dragType) {
+                const dx = pointerX - dragStartX;
+                const dy = pointerY - dragStartY;
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    if (!stateSavedForDrag) {
+                        saveStateSafe();
+                        stateSavedForDrag = true;
+                    }
+                }
+                if (dragType === 'move') {
+                    draggingElement.style.left = initialLeft + dx + 'px';
+                    draggingElement.style.top = initialTop + dy + 'px';
+                    containedElementsToMove.forEach((item) => {
+                        item.el.style.left = item.left + dx + 'px';
+                        item.el.style.top = item.top + dy + 'px';
+                    });
+                } else if (dragType === 'resize') {
                     draggingElement.style.width = Math.max(50, initialWidth + dx) + 'px';
                     draggingElement.style.height = Math.max(50, initialHeight + dy) + 'px';
                 }
             }
-        }
-    });
+        });
 
-    window.addEventListener('mouseup', () => {
-        if (isPanning) {
-            isPanning = false;
-            boardContainer.style.cursor = currentTool === 'pan' ? 'grab' : 'default';
-        }
-
-        if (isDrawing) {
-            isDrawing = false;
-            const ghost = getGhostFrame();
-            ghost.style.display = 'none';
-            
-            const width = parseFloat(ghost.style.width);
-            const height = parseFloat(ghost.style.height);
-            const left = parseFloat(ghost.style.left);
-            const top = parseFloat(ghost.style.top);
-
-            
-            if (width > 50 && height > 50) {
-                saveStateSafe(); // Save before creating
-                if (currentTool === 'board') {
-                    createBoardAt(left, top, width, height);
-                } else if (currentTool === 'frame') {
-                    createFrameAt(left, top, width, height);
-                }
+        window.addEventListener('mouseup', () => {
+            if (isPanning) {
+                isPanning = false;
+                boardContainer.style.cursor = currentTool === 'pan' ? 'grab' : 'default';
             }
-            setTool('select');
-        }
+            if (isDrawing) {
+                isDrawing = false;
+                const ghost = getGhostFrame();
+                ghost.style.display = 'none';
+                const width = parseFloat(ghost.style.width);
+                const height = parseFloat(ghost.style.height);
+                const left = parseFloat(ghost.style.left);
+                const top = parseFloat(ghost.style.top);
+                if (width > 50 && height > 50) {
+                    saveStateSafe();
+                    if (currentTool === 'board') createBoardAt(left, top, width, height);
+                    else if (currentTool === 'frame') createFrameAt(left, top, width, height);
+                }
+                setTool('select');
+            }
+            draggingElement = null;
+            dragType = null;
+            containedElementsToMove = [];
+        });
 
-        draggingElement = null;
-        dragType = null;
-        containedElementsToMove = [];
-    });
-
-    function ensureFrameUploadLabel(frameBody) {
-        if (!frameBody || frameBody.querySelector('.frame-upload-label')) return;
-        const lab = document.createElement('label');
-        lab.className = 'frame-upload-label';
-        lab.setAttribute('for', 'global-file-input');
-        lab.setAttribute('aria-label', 'Add images to this frame');
-        frameBody.insertBefore(lab, frameBody.firstChild);
-    }
-
-    function createBoardAt(x, y, w, h) {
-        const boardId = 'board-' + Date.now();
-        const board = document.createElement('div');
-        board.className = 'motif-board';
-        board.id = boardId;
-        board.style.left = x + 'px';
-        board.style.top = y + 'px';
-        board.style.width = w + 'px';
-        board.style.height = h + 'px';
-        board.style.zIndex = 0; 
-
-        board.innerHTML = `
+        function createBoardAt(x, y, w, h) {
+            const boardId = 'board-' + Date.now();
+            const board = document.createElement('div');
+            board.className = 'motif-board';
+            board.id = boardId;
+            board.style.left = x + 'px';
+            board.style.top = y + 'px';
+            board.style.width = w + 'px';
+            board.style.height = h + 'px';
+            board.style.zIndex = '0';
+            board.innerHTML = `
             <div class="board-header">
                 <input type="text" class="board-title" value="New Board">
-                <button class="delete-btn"><i class="fa-solid fa-trash"></i></button>
+                <button type="button" class="delete-btn"><i class="fa-solid fa-trash"></i></button>
             </div>
             <div class="board-resize-handle"></div>
-            <div class="individual-drag-handle" title="Move Individually"></div>
-            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Run Analysis</button>
-        `;
-        canvas.appendChild(board);
-        selectElement(board, 'board');
-        scheduleCloudSave();
-    }
+            <div class="individual-drag-handle" title="Move Individually"></div>`;
+            canvas.appendChild(board);
+            selectElement(board, 'board');
+            scheduleCloudSave();
+        }
 
-    function createFrameAt(x, y, w, h) {
-        const frameId = 'frame-' + Date.now();
-        const frame = document.createElement('div');
-        frame.className = 'motif-frame';
-        frame.id = frameId;
-        
-        frame.style.left = x + 'px';
-        frame.style.top = y + 'px';
-        frame.style.width = w + 'px';
-        frame.style.height = h + 'px';
-        frame.style.zIndex = 1;
-
-        frame.innerHTML = `
+        function createFrameAt(x, y, w, h) {
+            const frameId = 'frame-' + Date.now();
+            const frame = document.createElement('div');
+            frame.className = 'motif-frame';
+            frame.id = frameId;
+            frame.style.left = x + 'px';
+            frame.style.top = y + 'px';
+            frame.style.width = w + 'px';
+            frame.style.height = h + 'px';
+            frame.style.zIndex = '1';
+            frame.innerHTML = `
             <div class="frame-header">
-                <input type="text" class="frame-title" placeholder="Frame" value="New Motif">
-                <button class="delete-btn" title="Delete Frame"><i class="fa-solid fa-trash"></i></button>
+                <input type="text" class="frame-title" placeholder="Frame" value="New journal">
+                <button type="button" class="delete-btn" title="Delete frame"><i class="fa-solid fa-trash"></i></button>
             </div>
-            <div class="frame-body">
-                <label class="frame-upload-label" for="global-file-input" aria-label="Add images to this frame"></label>
-                <div class="empty-prompt">
-                    <i class="fa-solid fa-cloud-arrow-up"></i>
-                    Click to add images
+            <div class="frame-body journal-frame-body">
+                <textarea class="journal-entry-textarea" maxlength="500" rows="6" placeholder="What's on your mind?"></textarea>
+                <div class="journal-toolbar">
+                    <span class="journal-char-count">0 / 500</span>
+                    <button type="button" class="primary-btn find-vibe-btn">Find My Vibe</button>
                 </div>
             </div>
             <div class="frame-resize-handle"></div>
-            <div class="individual-drag-handle" title="Move Individually"></div>
-            <button class="run-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Run Analysis</button>
-        `;
-
-        canvas.appendChild(frame);
-        selectElement(frame, 'frame');
-        scheduleCloudSave();
-    }
-
-    function selectElement(el, type) {
-        deselectAll();
-        el.classList.add('selected');
-        if (type === 'frame' || type === 'card') {
-            el.style.zIndex = 10;
-        } else if (type === 'board') {
-            el.style.zIndex = 0;
-        }
-    }
-
-    function deselectAll() {
-        document.querySelectorAll('.motif-frame').forEach(f => { f.classList.remove('selected'); f.style.zIndex = 1; });
-        document.querySelectorAll('.motif-board').forEach(b => { b.classList.remove('selected'); b.style.zIndex = 0; });
-        document.querySelectorAll('.analysis-card').forEach(c => { c.classList.remove('selected'); c.style.zIndex = 5; });
-        document.querySelectorAll('.motif-image-node').forEach(i => i.classList.remove('selected'));
-    }
-
-    // --- DELEGATED DRAG & DROP FOR IMAGES ---
-    boardContainer.addEventListener('dragover', e => {
-        const frameBody = e.target.closest('.frame-body');
-        if (frameBody) {
-            e.preventDefault();
-            frameBody.style.background = 'rgba(107, 92, 231, 0.05)';
-        }
-    });
-
-    boardContainer.addEventListener('dragleave', e => {
-        const frameBody = e.target.closest('.frame-body');
-        if (frameBody) {
-            frameBody.style.background = 'transparent';
-        }
-    });
-
-    boardContainer.addEventListener('drop', e => {
-        const frameBody = e.target.closest('.frame-body');
-        if (frameBody) {
-            e.preventDefault();
-            frameBody.style.background = 'transparent';
-            activeFrameForUpload = frameBody.closest('.motif-frame');
-            void handleFiles(e.dataTransfer.files);
-        }
-    });
-
-    globalFileInput.addEventListener('change', (e) => {
-        if (activeFrameForUpload) void handleFiles(e.target.files);
-        globalFileInput.value = '';
-    });
-
-    const IMAGE_FILENAME_EXT_RE =
-        /\.(png|jpe?g|jfif|pjpeg|gif|webp|bmp|tif|tiff|heic|heif|avif|ico|svg)$/i;
-
-    function isLikelyImageFile(file) {
-        const t = (file.type || '').toLowerCase().trim();
-        if (t.startsWith('image/')) return true;
-        const name = (file.name || '').toLowerCase();
-        if (IMAGE_FILENAME_EXT_RE.test(name)) return true;
-        if ((t === 'application/octet-stream' || t === '' || t === 'binary/octet-stream') && name) {
-            return IMAGE_FILENAME_EXT_RE.test(name);
-        }
-        return false;
-    }
-
-    async function compressImage(dataUrl, maxWidth = 1000) {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-                if (!img.width || !img.height) {
-                    reject(new Error('Invalid image dimensions'));
-                    return;
-                }
-                const tempCanvas = document.createElement('canvas');
-                let width = img.width;
-                let height = img.height;
-
-                if (width > maxWidth) {
-                    height = Math.round((height * maxWidth) / width);
-                    width = maxWidth;
-                }
-
-                tempCanvas.width = width;
-                tempCanvas.height = height;
-                const ctx = tempCanvas.getContext('2d');
-                if (!ctx) {
-                    reject(new Error('Canvas not available'));
-                    return;
-                }
-                ctx.drawImage(img, 0, 0, width, height);
-                resolve({
-                    url: tempCanvas.toDataURL('image/jpeg', 0.7),
-                    aspectRatio: width / height
-                });
-            };
-            img.onerror = () => {
-                reject(new Error('Could not decode image (unsupported or corrupt file)'));
-            };
-            img.src = dataUrl;
-        });
-    }
-
-    function uint8ToBase64(bytes) {
-        const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        let binary = '';
-        const chunk = 0x8000;
-        for (let i = 0; i < arr.length; i += chunk) {
-            binary += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + chunk, arr.length)));
-        }
-        return btoa(binary);
-    }
-
-    function readFileAsDataURL(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('Could not read file'));
-            reader.readAsDataURL(file);
-        });
-    }
-
-    async function handleFiles(files) {
-        if (!activeFrameForUpload) return;
-        if (!auth.currentUser) {
-            alert('Sign in to add images. Files upload to Firebase Storage and your board saves to Firestore.');
-            return;
-        }
-
-        const list = Array.from(files || []).filter(Boolean);
-        if (list.length === 0) return;
-
-        const accepted = list.filter(isLikelyImageFile);
-        if (accepted.length === 0) {
-            alert(
-                'No supported images were found in that selection.\n\n' +
-                    'Use PNG, JPEG, GIF, WebP, HEIC/HEIF (browser-dependent), SVG, BMP, TIFF, AVIF, or ICO. ' +
-                    'Some screenshots arrive with no file type — try saving as PNG or JPEG and uploading again.'
-            );
-            return;
-        }
-        if (accepted.length < list.length) {
-            console.warn(
-                'MyMotif: skipped',
-                list.length - accepted.length,
-                'file(s) that did not look like supported images.'
-            );
-        }
-
-        const frame = activeFrameForUpload;
-        const frameBody = frame.querySelector('.frame-body');
-        const runBtn = frame.querySelector('.run-btn');
-        runBtn?.classList.remove('ready');
-
-        saveStateSafe();
-        frameBody.classList.add('has-content');
-
-        const fw = frame.offsetWidth;
-        const fh = frame.offsetHeight;
-        const baseSlot = Math.min(fw, fh) * 0.4;
-
-        const uid = auth.currentUser.uid;
-        const uploadFailures = [];
-        const storageSoftFailures = [];
-
-        await Promise.all(
-            accepted.map(async (file, idx) => {
-                const offset = idx * 20;
-                const imgNode = document.createElement('div');
-                imgNode.className = 'motif-image-node';
-                const size = baseSlot;
-                imgNode.style.width = size + 'px';
-                imgNode.style.height = size + 'px';
-                imgNode.style.left = fw / 2 - size / 2 + offset + 'px';
-                imgNode.style.top = fh / 2 - size / 2 + offset + 'px';
-                imgNode.innerHTML = `
-                    <div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#eee;">
-                        <i class="fa-solid fa-spinner fa-spin" style="color:var(--accent);"></i>
-                    </div>
-                `;
-                frameBody.appendChild(imgNode);
-
-                try {
-                    const rawDataUrl = await readFileAsDataURL(file);
-                    const result = await compressImage(rawDataUrl);
-                    const aspectRatio = result.aspectRatio;
-                    const baseSize = Math.min(frame.offsetWidth, frame.offsetHeight) * 0.4;
-                    if (aspectRatio > 1) {
-                        imgNode.style.width = baseSize + 'px';
-                        imgNode.style.height = baseSize / aspectRatio + 'px';
-                    } else {
-                        imgNode.style.height = baseSize + 'px';
-                        imgNode.style.width = baseSize * aspectRatio + 'px';
-                    }
-
-                    imgNode.innerHTML = '';
-                    const imgEl = document.createElement('img');
-                    imgEl.src = result.url;
-                    imgEl.alt = '';
-                    const resizeHandle = document.createElement('div');
-                    resizeHandle.className = 'image-resize-handle';
-                    const dragHandle = document.createElement('div');
-                    dragHandle.className = 'individual-drag-handle';
-                    dragHandle.title = 'Move Individually';
-                    imgNode.append(imgEl, resizeHandle, dragHandle);
-
-                    try {
-                        const storagePath = `boards/${uid}/canvasImages/${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 11)}.jpg`;
-                        const jpegBlob = await fetch(result.url).then((r) => r.blob());
-                        const storageRef = ref(storage, storagePath);
-                        await uploadBytes(storageRef, jpegBlob, { contentType: 'image/jpeg' });
-                        const downloadURL = await getDownloadURL(storageRef);
-                        imgNode.dataset.storagePath = storagePath;
-                        imgEl.dataset.downloadUrl = downloadURL;
-                        try {
-                            const displayBlob = await getBlob(storageRef);
-                            const prev = (imgEl.getAttribute('src') || '').trim();
-                            if (prev.startsWith('blob:')) {
-                                try {
-                                    URL.revokeObjectURL(prev);
-                                } catch {
-                                    /* ignore */
-                                }
-                            }
-                            imgEl.src = URL.createObjectURL(displayBlob);
-                        } catch (blobErr) {
-                            console.warn(
-                                'MyMotif: getBlob after upload failed; keeping on-canvas preview:',
-                                blobErr && (blobErr.code || blobErr.message)
-                            );
-                            storageSoftFailures.push(file.name || 'image');
-                        }
-                    } catch (upErr) {
-                        console.warn(
-                            'MyMotif: Storage upload failed; image stays as local preview only:',
-                            upErr && (upErr.code || upErr.message)
-                        );
-                        storageSoftFailures.push(file.name || 'image');
-                    }
-                } catch (error) {
-                    console.error('Image processing failed:', error);
-                    uploadFailures.push(file.name || 'image');
-                    imgNode.remove();
-                }
-            })
-        );
-
-        if (uploadFailures.length) {
-            alert(
-                `Could not process or show: ${uploadFailures.join(', ')}\n` +
-                    (uploadFailures.length === accepted.length
-                        ? 'Try a different file format (PNG/JPEG).'
-                        : 'Other images were added.')
-            );
-        } else if (storageSoftFailures.length) {
-            console.warn(
-                'MyMotif: Firebase Storage unavailable for some images; they are visible on canvas but may not sync or analyze until Storage works:',
-                storageSoftFailures.join(', ')
-            );
-        }
-
-        syncFrameRunButton(frame);
-        await persistBoardToCloud({ silent: true }).catch((err) => console.warn('Save after upload:', err));
-        scheduleCloudSave();
-    }
-
-    // On-Canvas Analysis Card Logic
-    function getContainedNodes(boardEl) {
-        const contained = [];
-        const bx = parseFloat(boardEl.style.left);
-        const by = parseFloat(boardEl.style.top);
-        const bw = parseFloat(boardEl.style.width);
-        const bh = parseFloat(boardEl.style.height);
-        
-        document.querySelectorAll('.motif-frame').forEach(node => {
-            const nx = parseFloat(node.style.left);
-            const ny = parseFloat(node.style.top);
-            const nw = parseFloat(node.style.width) || node.offsetWidth;
-            const nh = parseFloat(node.style.height) || node.offsetHeight;
-            
-            const cx = nx + nw/2;
-            const cy = ny + nh/2;
-            if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) {
-                contained.push(node);
-            }
-        });
-        return contained;
-    }
-
-    // A) API key: Google AI (Gemini) with Generative Language API enabled.
-    // Uses MYMOTIF_DEFAULT_GEMINI_API_KEY unless you set a non-empty window.MYMOTIF_GEMINI_API_KEY before load.
-    // Single model only (v1): gemini-1.5-flash-latest — no fallback chain.
-    //
-    // GitHub Pages API key restriction (HTTP referrers) should include BOTH:
-    //   https://ritzcrackers12.github.io/*
-    //   https://ritzcrackers12.github.io/MyMotif/*
-    // plus http://localhost:* for local dev.
-    const winGeminiOverride =
-        typeof window !== 'undefined' &&
-        typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
-        window.MYMOTIF_GEMINI_API_KEY.trim();
-    const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
-    console.log('MyMotif: Gemini key source →', winGeminiOverride ? 'window.MYMOTIF_GEMINI_API_KEY' : 'MYMOTIF_DEFAULT_GEMINI_API_KEY');
-
-    const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-
-    function geminiRetryMsFromMessage(message) {
-        if (!message) return 0;
-        const m = String(message).match(/retry in ([\d.]+)\s*s/i);
-        if (!m) return 0;
-        const sec = parseFloat(m[1]);
-        if (!Number.isFinite(sec) || sec < 0) return 0;
-        return Math.min(Math.ceil(sec * 1000), 45000);
-    }
-
-    function geminiRetryMsFromResponse(response, message) {
-        try {
-            const h = response && response.headers && response.headers.get('Retry-After');
-            if (h) {
-                const sec = parseFloat(h);
-                if (Number.isFinite(sec) && sec > 0) {
-                    return Math.min(Math.ceil(sec * 1000), 120000);
-                }
-            }
-        } catch {
-            /* ignore */
-        }
-        return geminiRetryMsFromMessage(message);
-    }
-
-    function geminiSleep(ms) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-
-    const GEMINI_FETCH_TIMEOUT_MS = 75000;
-
-    function geminiCandidateHasText(data) {
-        const parts = data?.candidates?.[0]?.content?.parts;
-        if (!Array.isArray(parts)) return false;
-        return parts.some((p) => typeof p.text === 'string' && p.text.trim().length > 0);
-    }
-
-    /**
-     * Calls Gemini v1 `gemini-1.5-flash-latest` only (no model fallback). Retries on 429 with delays.
-     */
-    async function geminiGenerateContent(requestBody) {
-        let lastMessage = '';
-        const maxAttempts = 6;
-        const minDelayBetween429RetriesMs = 12000;
-
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
-            let response;
-            try {
-                response = await fetch(GEMINI_GENERATE_CONTENT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody),
-                    signal: controller.signal
-                });
-            } catch (e) {
-                clearTimeout(timer);
-                if (e && e.name === 'AbortError') {
-                    lastMessage = `Request timed out after ${Math.round(GEMINI_FETCH_TIMEOUT_MS / 1000)}s (network or very large images). Try fewer images or a faster connection.`;
-                } else {
-                    lastMessage = e && e.message ? String(e.message) : 'Network error calling Gemini.';
-                }
-                break;
-            }
-            clearTimeout(timer);
-
-            const data = await response.json().catch(() => ({}));
-
-            if (data.promptFeedback?.blockReason) {
-                lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
-                break;
-            }
-
-            const c0 = data.candidates?.[0];
-            if (response.ok && c0) {
-                if (!geminiCandidateHasText(data)) {
-                    const fr = c0.finishReason || c0.finish_reason;
-                    lastMessage = fr
-                        ? `Model returned no text (finish: ${fr}). Try different images or a smaller set.`
-                        : 'Model returned no text in the response.';
-                    break;
-                }
-                return data;
-            }
-
-            lastMessage = data.error?.message || `HTTP ${response.status}`;
-
-            const is429 =
-                response.status === 429 ||
-                data.error?.status === 'RESOURCE_EXHAUSTED' ||
-                /quota|exceeded|Resource exhausted|Too Many Requests/i.test(lastMessage);
-            if (is429 && attempt < maxAttempts - 1) {
-                let waitMs = geminiRetryMsFromResponse(response, lastMessage);
-                if (waitMs < minDelayBetween429RetriesMs) waitMs = minDelayBetween429RetriesMs;
-                await geminiSleep(waitMs);
-                continue;
-            }
-
-            break;
-        }
-        const hint429 =
-            /429|quota|Resource exhausted|Too Many Requests/i.test(lastMessage)
-                ? ' (429 = rate limit: waits were applied between retries; try again later or enable billing in Google AI Studio.)'
-                : '';
-        throw new Error(
-            (lastMessage ||
-                'Gemini request failed (v1 models/gemini-1.5-flash-latest). Check https://aistudio.google.com/ for API access and quotas.') + hint429
-        );
-    }
-
-    async function callGeminiFollowUp(insights, messages) {
-        const ctx = JSON.stringify(insights);
-        const ctxTrim = ctx.length > 14000 ? ctx.slice(0, 14000) + "\n…(truncated)" : ctx;
-        const historyContents = [];
-        for (const m of messages) {
-            const role = m.role === "user" ? "user" : "model";
-            historyContents.push({ role, parts: [{ text: m.text }] });
-        }
-        const body = {
-            systemInstruction: {
-                parts: [
-                    {
-                        text:
-                            `You are the same expert visual design analyst who produced the structured analysis. The user has that analysis on screen. Answer follow-ups clearly and concisely (short paragraphs or tight bullets). Ground answers in the JSON below; if you cannot know something from the analysis, say so.\n\nAnalysis JSON:\n${ctxTrim}`
-                    }
-                ]
-            },
-            contents: historyContents,
-            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
-        };
-        const data = await geminiGenerateContent(body);
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        const out = String(text).trim();
-        return out || "(No reply text returned.)";
-    }
-
-    function bindFollowUpPanel(card) {
-        const wrap = card.querySelector(".followup-chat");
-        if (!wrap || !card._myMotifInsights) return;
-        const thread = wrap.querySelector("[data-followup-thread]");
-        const input = wrap.querySelector("[data-followup-input]");
-        const sendBtn = wrap.querySelector("[data-followup-send]");
-        if (!thread || !input || !sendBtn) return;
-
-        function appendBubble(role, text) {
-            const div = document.createElement("div");
-            div.className = "followup-msg followup-msg-" + role;
-            div.textContent = text;
-            thread.appendChild(div);
-            thread.scrollTop = thread.scrollHeight;
-        }
-
-        async function sendFollowUp() {
-            const text = input.value.trim();
-            if (!text) return;
-            input.value = "";
-            appendBubble("user", text);
-            card._myMotifFollowUp.push({ role: "user", text });
-
-            const loading = document.createElement("div");
-            loading.className = "followup-msg followup-msg-model followup-loading";
-            loading.textContent = "Thinking…";
-            thread.appendChild(loading);
-            thread.scrollTop = thread.scrollHeight;
-
-            try {
-                const reply = await callGeminiFollowUp(card._myMotifInsights, card._myMotifFollowUp);
-                loading.remove();
-                appendBubble("model", reply);
-                card._myMotifFollowUp.push({ role: "model", text: reply });
-                scheduleCloudSave();
-            } catch (err) {
-                loading.remove();
-                const msg = err.message || String(err);
-                appendBubble("model", "Sorry — " + msg);
-                card._myMotifFollowUp.push({ role: "model", text: msg });
-            }
-        }
-
-        sendBtn.onclick = (e) => {
-            e.preventDefault();
-            sendFollowUp();
-        };
-        input.onkeydown = (e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendFollowUp();
-            }
-        };
-        if (!wrap.dataset.followupBound) {
-            wrap.addEventListener("mousedown", (e) => e.stopPropagation());
-            wrap.dataset.followupBound = "1";
-        }
-    }
-
-    function mountFollowUpChat(card, insights) {
-        const resultsDiv = card.querySelector(".analysis-results");
-        if (!resultsDiv) return;
-        resultsDiv.querySelector(".followup-chat")?.remove();
-
-        card._myMotifInsights = insights;
-        card._myMotifFollowUp = [];
-
-        const wrap = document.createElement("div");
-        wrap.className = "followup-chat";
-        wrap.innerHTML = `
-            <div class="followup-header"><i class="fa-solid fa-message"></i> Follow-up</div>
-            <div class="followup-thread" data-followup-thread></div>
-            <div class="followup-input-row">
-                <textarea rows="2" class="followup-textarea" placeholder="Ask a follow-up… Enter sends · Shift+Enter newline" data-followup-input></textarea>
-                <button type="button" class="followup-send" data-followup-send title="Send"><i class="fa-solid fa-arrow-up"></i></button>
-            </div>`;
-        resultsDiv.appendChild(wrap);
-        bindFollowUpPanel(card);
-    }
-
-    function rehydrateAnalysisCardsFromDom() {
-        canvas.querySelectorAll(".analysis-card").forEach((card) => {
-            const store = card.querySelector(".analysis-payload-store");
-            if (!store || !store.textContent.trim()) return;
-            let insights;
-            try {
-                insights = JSON.parse(store.textContent);
-            } catch (e) {
-                return;
-            }
-            card._myMotifInsights = insights;
-            card._myMotifFollowUp = [];
-            card.querySelectorAll(".followup-thread .followup-msg").forEach((el) => {
-                if (el.classList.contains("followup-loading")) return;
-                const role = el.classList.contains("followup-msg-user") ? "user" : "model";
-                card._myMotifFollowUp.push({ role, text: el.textContent });
-            });
-            bindFollowUpPanel(card);
-        });
-    }
-
-    // --- INLINE IMAGE COMMENT (bubble editor → Enter → small chip, stays on this node for Gemini) ---
-    let activeCommentEditor = null;
-
-    function stripCommentUI(imgNode) {
-        imgNode.querySelectorAll('.image-comment-editor, .image-comment-chip, .image-comment, .image-comment-icon').forEach((el) => el.remove());
-    }
-
-    function truncateCommentText(str, max) {
-        const s = str.trim();
-        if (s.length <= max) return s;
-        return s.slice(0, max - 1) + '…';
-    }
-
-    function renderCommentChip(imgNode) {
-        const val = (imgNode.dataset.comment || '').trim();
-        stripCommentUI(imgNode);
-        if (!val) return;
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'image-comment-chip';
-        chip.title = val;
-        chip.setAttribute('aria-label', 'Edit note on this image');
-        const icon = document.createElement('i');
-        icon.className = 'fa-solid fa-comment-dots';
-        const span = document.createElement('span');
-        span.className = 'image-comment-chip-text';
-        span.textContent = truncateCommentText(val, 36);
-        chip.append(icon, span);
-        chip.addEventListener('click', (ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            openCommentModal(imgNode);
-        });
-        chip.addEventListener('mousedown', (ev) => ev.stopPropagation());
-        imgNode.appendChild(chip);
-    }
-
-    function commitInlineComment(imgNode, textarea) {
-        const val = textarea.value.trim();
-        imgNode.dataset.comment = val;
-        activeCommentEditor = null;
-        renderCommentChip(imgNode);
-        setTool('select');
-    }
-
-    function cancelInlineComment(imgNode, initialDataset) {
-        imgNode.dataset.comment = initialDataset;
-        activeCommentEditor = null;
-        renderCommentChip(imgNode);
-        setTool('select');
-    }
-
-    function openCommentModal(imgNode) {
-        if (activeCommentEditor) {
-            if (activeCommentEditor.imgNode === imgNode) {
-                activeCommentEditor.wrap.querySelector('textarea').focus();
-                return;
-            }
-            const prevTa = activeCommentEditor.wrap.querySelector('textarea');
-            commitInlineComment(activeCommentEditor.imgNode, prevTa);
-        }
-
-        const legacyBubble = imgNode.querySelector('.image-comment');
-        if (legacyBubble && legacyBubble.textContent.trim() && !(imgNode.dataset.comment || '').trim()) {
-            imgNode.dataset.comment = legacyBubble.textContent.trim();
-        }
-        const initialDataset = imgNode.dataset.comment || '';
-
-        stripCommentUI(imgNode);
-
-        const wrap = document.createElement('div');
-        wrap.className = 'image-comment-editor';
-        wrap.innerHTML = `
-            <div class="image-comment-editor-inner">
-                <textarea class="image-comment-editor-input" rows="3" placeholder="What do you like about this image?"></textarea>
-                <div class="image-comment-editor-hint"><kbd>Enter</kbd> save · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Esc</kbd> cancel</div>
-            </div>
-        `;
-        const textarea = wrap.querySelector('textarea');
-        textarea.value = initialDataset;
-        imgNode.appendChild(wrap);
-        textarea.focus();
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-
-        textarea.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                commitInlineComment(imgNode, textarea);
-            }
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelInlineComment(imgNode, initialDataset);
-            }
-        });
-
-        wrap.addEventListener('mousedown', (e) => e.stopPropagation());
-
-        activeCommentEditor = { imgNode, wrap };
-    }
-
-    // --- CONTEXT MODAL ---
-    function openContextModal(frame) {
-        const existing = frame.dataset.context || '';
-        const overlay = document.createElement('div');
-        overlay.className = 'comment-input-overlay';
-        overlay.innerHTML = `
-            <div class="comment-input-modal">
-                <h3><i class="fa-solid fa-bullseye" style="color:var(--accent); margin-right:6px;"></i>Set Frame Context</h3>
-                <p>What's the project? Tell Gemini what you're trying to create so it can give you actionable advice.</p>
-                <textarea id="context-textarea" placeholder="e.g. I'm designing a t-shirt with stars but I can't figure out the right style...">${existing}</textarea>
-                <div class="modal-actions">
-                    <button class="cancel-btn">Cancel</button>
-                    <button class="save-btn">Save Context</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(overlay);
-        const textarea = overlay.querySelector('#context-textarea');
-        textarea.focus();
-
-        overlay.querySelector('.cancel-btn').addEventListener('click', () => overlay.remove());
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-        overlay.querySelector('.save-btn').addEventListener('click', () => {
-            const val = textarea.value.trim();
-            frame.dataset.context = val;
-
-            // Remove old context bar
-            frame.querySelector('.frame-context-bar')?.remove();
-
-            if (val) {
-                const bar = document.createElement('div');
-                bar.className = 'frame-context-bar';
-                bar.innerHTML = `
-                    <i class="fa-solid fa-bullseye"></i>
-                    <span title="${val}">${val}</span>
-                    <button class="edit-context-btn" title="Edit Context"><i class="fa-solid fa-pen"></i></button>
-                `;
-                frame.appendChild(bar);
-
-                // Edit button
-                bar.querySelector('.edit-context-btn').addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    openContextModal(frame);
-                });
-            }
-            overlay.remove();
-            setTool('select');
-        });
-    }
-
-    function getImageCommentText(node) {
-        const fromData = (node.dataset.comment || '').trim();
-        if (fromData) return fromData;
-        const legacy = node.querySelector('.image-comment');
-        if (legacy && legacy.textContent) return legacy.textContent.trim();
-        return '';
-    }
-
-    async function runAnalysis(parentNode) {
-        const isBoard = parentNode.classList.contains('motif-board');
-        const titleInput = parentNode.querySelector(isBoard ? '.board-title' : '.frame-title');
-        const title = titleInput ? titleInput.value : 'Analysis';
-
-        let containedFrames = [];
-        if (isBoard) {
-            containedFrames = getContainedNodes(parentNode);
-            if (containedFrames.length === 0) {
-                alert("Add some frames with images to the board first!");
-                return;
-            }
-        } else {
-            containedFrames = [parentNode];
-        }
-
-        const imageRecords = [];
-        let imageOrdinal = 0;
-        const collectFromFrame = (frameEl) => {
-            const frameTitle = frameEl.querySelector('.frame-title')?.value?.trim() || 'Frame';
-            frameEl.querySelectorAll('.motif-image-node').forEach((node) => {
-                const img = node.querySelector('img');
-                if (!img) return;
-                imageOrdinal += 1;
-                imageRecords.push({
-                    img,
-                    node,
-                    frameTitle,
-                    index: imageOrdinal
-                });
-            });
-        };
-        containedFrames.forEach(collectFromFrame);
-
-        if (imageRecords.length === 0) {
-            alert("Add some images first, then use the Comment tool on each image to note what you like. Run analysis when you're ready.");
-            return;
-        }
-
-        if (!auth.currentUser) {
-            alert('Please sign in to run analysis.');
-            return;
-        }
-
-        for (const { node } of imageRecords) {
-            const path = (node.getAttribute('data-storage-path') || '').trim();
-            if (!path.startsWith('boards/')) {
-                alert(
-                    'Every image needs a Firebase Storage path. Re-upload images while signed in, then run analysis when the button shows ready.'
-                );
-                return;
-            }
-        }
-
-        saveStateSafe();
-
-        const px = parseFloat(parentNode.style.left);
-        const py = parseFloat(parentNode.style.top);
-        const pw = parseFloat(parentNode.style.width);
-
-        const card = spawnAnalysisCard(title, px + pw + 40, py);
-
-        const commentLines = imageRecords.map((r) => {
-            const note = getImageCommentText(r.node);
-            return `Image ${r.index} (frame "${r.frameTitle}"): ${note ? note : '(no written note — rely on pixels only for this one)'}`;
-        });
-        const commentsText =
-            `\nThe user added these per-image notes. Image order matches the images attached above (Image 1 first, then 2, …). Weight these notes heavily when suggesting search queries, styles, and features:\n${commentLines.join('\n')}\n`;
-
-        let contextText = '';
-        const contexts = containedFrames.map((f) => f.dataset.context).filter(Boolean);
-        if (contexts.length > 0) {
-            contextText = `The user's project context and goals:\n${contexts.map((c) => `- ${c}`).join('\n')}\n`;
-        }
-
-        const storageUrlLines = imageRecords.map((r, i) => {
-            const dl = (r.img.getAttribute('data-download-url') || '').trim();
-            const path = (r.node.getAttribute('data-storage-path') || '').trim();
-            if (dl.startsWith('https://') && dl.includes('firebasestorage')) {
-                return `Image ${i + 1}: ${dl}`;
-            }
-            return `Image ${i + 1}: ${path} (Firebase Storage path; bytes attached in order)`;
-        });
-        const urlIndexText = `Firebase Storage references for this analysis (image bytes follow in the same order):\n${storageUrlLines.join('\n')}\n`;
-
-        const imageParts = [];
-        for (const { node } of imageRecords) {
-            const path = (node.getAttribute('data-storage-path') || '').trim();
-            try {
-                const blob = await getBlob(ref(storage, path));
-                const buf = await blob.arrayBuffer();
-                let mime = (blob.type || '').split(';')[0].trim().toLowerCase();
-                if (!mime.startsWith('image/')) mime = 'image/jpeg';
-                imageParts.push({
-                    inline_data: {
-                        mime_type: mime,
-                        data: uint8ToBase64(new Uint8Array(buf))
-                    }
-                });
-            } catch (err) {
-                console.warn('Could not read Storage object for Gemini:', path, err);
-                showAnalysisError(
-                    card,
-                    'Could not read an image from Firebase Storage. Stay signed in and try again, or re-upload the image.'
-                );
-                return;
-            }
-        }
-
-        if (imageParts.length === 0) {
-            showAnalysisError(card, 'No images to analyze.');
-            return;
-        }
-
-        const analystPreamble = `You are an expert visual design analyst and aesthetic researcher with deep knowledge of design history, art movements, graphic design theory, and contemporary visual culture. You specialize in identifying the subtle visual DNA that makes a collection of images feel cohesive.
-
-When a user uploads a collection of images under a motif title, you will analyze them with the depth of a senior creative director, not a casual observer. Your analysis should surface insights the user couldn't articulate themselves — the subconscious patterns they are drawn to.`;
-
-        const jsonContract = `You MUST respond with a single valid JSON object only (no markdown, no prose outside JSON). Use exactly these keys:
-
-1. "visual_dna" (string): Break down what the designs share across form, line quality, proportion, complexity, texture, color, and how literal vs abstract they are.
-
-2. "tension_analysis" (string): Contradictions within the collection; what the user is pulled between.
-
-3. "aesthetic_movements" (array of objects): Each object: "name" (string, e.g. Cybersigilism, Brutalism), "match_percent" (integer 0-100), "explanation" (string — why this movement fits).
-
-4. "unconscious_preference_summary" (string): Exactly 2-3 sentences on what the collection reveals about their taste that they probably could not say themselves.
-
-5. "what_to_explore_next" (string): One direction slightly outside their comfort zone that logically extends their taste.
-
-6. "search_queries" (object) with these array-of-strings properties (each at least 3 items when possible):
-   - "precise_design_terminology"
-   - "broad_discovery"
-   - "specific_artists_or_designers"
-   - "pinterest" (queries tuned for Pinterest visual search)
-   - "arena" (queries tuned for Are.na boards / channels)
-   - "google_images" (queries tuned for Google Images)
-
-7. "do_not_explore" (array of strings): Aesthetic directions that would feel wrong for this collection.
-
-8. "era_fingerprint" (string): What decade or design era the collection feels rooted in.
-
-9. "mood_score" (object) with three sub-objects, each with "score_0_to_100" (integer) and "interpretation" (short string):
-   - "warm_vs_cold" (0 = ice-cold / clinical, 100 = warm / intimate)
-   - "loud_vs_quiet" (0 = whisper-quiet / minimal, 100 = loud / maximal)
-   - "familiar_vs_alien" (0 = familiar / mainstream, 100 = alien / uncanny)
-
-10. "cultural_geography" (string): What cultural visual tradition(s) the collection pulls from (regions, diasporas, vernaculars, or global fusion).`;
-
-        const userTask = `Motif / frame title: "${title}"
-
-${contextText || ''}${commentsText}
-
-There are exactly ${imageParts.length} images attached in order (Image 1 through Image ${imageParts.length}). Map each per-image note to the matching image. If a note is missing for an image, infer from that image alone.
-
-Return the JSON object now.`;
-
-        const requestBody = {
-            contents: [{
-                parts: [
-                    { text: urlIndexText },
-                    ...imageParts,
-                    { text: `${analystPreamble}\n\n${jsonContract}\n\n${userTask}` }
-                ]
-            }],
-            generationConfig: {
-                temperature: 0.65,
-                maxOutputTokens: 4096,
-                responseMimeType: 'application/json'
-            }
-        };
-
-        function parseGeminiJson(rawText) {
-            let s = String(rawText || '')
-                .replace(/^\uFEFF/, '')
-                .replace(/```json\s*/gi, '')
-                .replace(/```\s*/g, '')
-                .trim();
-            try {
-                return JSON.parse(s);
-            } catch (firstErr) {
-                const start = s.indexOf('{');
-                const end = s.lastIndexOf('}');
-                if (start >= 0 && end > start) {
-                    return JSON.parse(s.slice(start, end + 1));
-                }
-                throw firstErr;
-            }
-        }
-
-        try {
-            const data = await geminiGenerateContent(requestBody);
-            const candidate = data.candidates?.[0];
-            if (!candidate) {
-                const br = data.promptFeedback?.blockReason || data.error?.message;
-                throw new Error(br ? String(br) : 'No response from Gemini. Check API key and quota.');
-            }
-            const rawText = candidate.content?.parts?.[0]?.text || '';
-            const insights = parseGeminiJson(rawText);
-            renderAnalysisResults(card, insights);
+            <div class="individual-drag-handle" title="Move Individually"></div>`;
+            canvas.appendChild(frame);
+            bindJournalFrame(frame);
+            selectElement(frame, 'frame');
             scheduleCloudSave();
-        } catch (error) {
-            console.error("Gemini API Error:", error);
-            showAnalysisError(card, error.message || String(error));
-        }
-    }
-
-    function spawnAnalysisCard(title, x, y) {
-        const cardId = 'card-' + Date.now();
-        const card = document.createElement('div');
-        card.className = 'analysis-card';
-        card.id = cardId;
-        card.style.left = x + 'px';
-        card.style.top = y + 'px';
-        card.style.zIndex = 5;
-
-        card.innerHTML = `
-            <div class="card-header">
-                <h2>Analysis: ${escapeHtml(title)}</h2>
-                <button class="delete-btn"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div class="individual-drag-handle" title="Move Individually"></div>
-            <div class="analysis-loader">
-                <div class="spinner"></div>
-                <p>Running analysis…</p>
-            </div>
-            <div class="analysis-results hidden"></div>
-        `;
-        canvas.appendChild(card);
-        selectElement(card, 'card');
-        return card;
-    }
-
-    function escapeHtml(s) {
-        if (s == null) return '';
-        return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
-
-    function renderTagList(items) {
-        const arr = Array.isArray(items) ? items : [];
-        return arr.map((q) => `<span class="search-query">${escapeHtml(q)}</span>`).join('');
-    }
-
-    function renderMoodRow(label, sub) {
-        if (!sub || typeof sub !== 'object') return '';
-        const score = typeof sub.score_0_to_100 === 'number' ? sub.score_0_to_100 : parseInt(sub.score, 10) || 0;
-        const clamped = Math.max(0, Math.min(100, score));
-        const interp = sub.interpretation || sub.label || '';
-        return `
-            <div class="mood-row">
-                <div class="mood-row-label">${escapeHtml(label)}</div>
-                <div class="mood-bar-track"><div class="mood-bar-fill" style="width:${clamped}%"></div></div>
-                <div class="mood-row-meta"><span class="mood-pct">${clamped}</span>${interp ? ` — ${escapeHtml(interp)}` : ''}</div>
-            </div>`;
-    }
-
-    function renderAnalysisResults(card, insights) {
-        const loader = card.querySelector('.analysis-loader');
-        const resultsDiv = card.querySelector('.analysis-results');
-        if (!loader || !resultsDiv) return;
-
-        const sq = insights.search_queries && typeof insights.search_queries === 'object' ? insights.search_queries : {};
-        const movements = Array.isArray(insights.aesthetic_movements) ? insights.aesthetic_movements : [];
-        const movementHtml = movements
-            .map((m) => {
-                const name = m.name || 'Movement';
-                const pct = typeof m.match_percent === 'number' ? m.match_percent : parseInt(m.match_percent, 10);
-                const p = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : '—';
-                const expl = m.explanation || '';
-                return `<div class="movement-card"><div class="movement-card-head"><strong>${escapeHtml(name)}</strong><span class="match-pct">${escapeHtml(String(p))}${p !== '—' ? '%' : ''}</span></div><p>${escapeHtml(expl)}</p></div>`;
-            })
-            .join('');
-
-        const mood = insights.mood_score && typeof insights.mood_score === 'object' ? insights.mood_score : {};
-        const moodHtml =
-            renderMoodRow('Warm ↔ Cold', mood.warm_vs_cold) +
-            renderMoodRow('Loud ↔ Quiet', mood.loud_vs_quiet) +
-            renderMoodRow('Familiar ↔ Alien', mood.familiar_vs_alien);
-
-        const doNot = Array.isArray(insights.do_not_explore) ? insights.do_not_explore : [];
-        const doNotHtml = doNot.length ? `<ul>${doNot.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : '<p class="muted">—</p>';
-
-        resultsDiv.innerHTML = `
-            <div class="analysis-results-main">
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-dna" style="margin-right:6px; color:var(--accent);"></i>Visual DNA</h3>
-                <p>${escapeHtml(insights.visual_dna) || '—'}</p>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-bolt" style="margin-right:6px; color:var(--accent);"></i>Tension analysis</h3>
-                <p>${escapeHtml(insights.tension_analysis) || '—'}</p>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-layer-group" style="margin-right:6px; color:var(--accent);"></i>Aesthetic movements</h3>
-                <div class="movement-stack">${movementHtml || '<p class="muted">—</p>'}</div>
-            </div>
-            <div class="analysis-section highlight-panel">
-                <h3><i class="fa-solid fa-brain" style="margin-right:6px; color:var(--accent);"></i>Unconscious preference summary</h3>
-                <p>${escapeHtml(insights.unconscious_preference_summary) || '—'}</p>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-compass" style="margin-right:6px; color:var(--accent);"></i>What to explore next</h3>
-                <p>${escapeHtml(insights.what_to_explore_next) || '—'}</p>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-magnifying-glass" style="margin-right:6px; color:var(--accent);"></i>Search queries</h3>
-                <div class="analysis-subsection"><h4>Precise design terminology</h4><div class="tags-container">${renderTagList(sq.precise_design_terminology)}</div></div>
-                <div class="analysis-subsection"><h4>Broad discovery</h4><div class="tags-container">${renderTagList(sq.broad_discovery)}</div></div>
-                <div class="analysis-subsection"><h4>Artists &amp; designers</h4><div class="tags-container">${renderTagList(sq.specific_artists_or_designers)}</div></div>
-                <div class="analysis-subsection"><h4>Pinterest</h4><div class="tags-container">${renderTagList(sq.pinterest)}</div></div>
-                <div class="analysis-subsection"><h4>Are.na</h4><div class="tags-container">${renderTagList(sq.arena)}</div></div>
-                <div class="analysis-subsection"><h4>Google Images</h4><div class="tags-container">${renderTagList(sq.google_images)}</div></div>
-            </div>
-            <div class="analysis-section warn-panel">
-                <h3><i class="fa-solid fa-ban" style="margin-right:6px; color:#B45309;"></i>Do not explore</h3>
-                ${doNotHtml}
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-clock-rotate-left" style="margin-right:6px; color:var(--accent);"></i>Era fingerprint</h3>
-                <p>${escapeHtml(insights.era_fingerprint) || '—'}</p>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-gauge-high" style="margin-right:6px; color:var(--accent);"></i>Mood score</h3>
-                <div class="mood-stack">${moodHtml || '<p class="muted">—</p>'}</div>
-            </div>
-            <div class="analysis-section">
-                <h3><i class="fa-solid fa-earth-americas" style="margin-right:6px; color:var(--accent);"></i>Cultural geography</h3>
-                <p>${escapeHtml(insights.cultural_geography) || '—'}</p>
-            </div>
-            </div>
-        `;
-
-        const mainEl = resultsDiv.querySelector(".analysis-results-main");
-        if (mainEl) {
-            mainEl.querySelector(".analysis-payload-store")?.remove();
-            const store = document.createElement("textarea");
-            store.className = "analysis-payload-store";
-            store.setAttribute("aria-hidden", "true");
-            store.hidden = true;
-            store.textContent = JSON.stringify(insights);
-            mainEl.appendChild(store);
         }
 
-        loader.classList.add('hidden');
-        resultsDiv.classList.remove('hidden');
-        mountFollowUpChat(card, insights);
-    }
+        function selectElement(el, type) {
+            deselectAll();
+            el.classList.add('selected');
+            if (type === 'frame') el.style.zIndex = '10';
+            else if (type === 'board') el.style.zIndex = '0';
+        }
 
-    function showAnalysisError(card, message) {
-        const loader = card.querySelector('.analysis-loader');
-        const resultsDiv = card.querySelector('.analysis-results');
-        if (!loader || !resultsDiv) return;
+        function deselectAll() {
+            document.querySelectorAll('.motif-frame').forEach((f) => {
+                f.classList.remove('selected');
+                f.style.zIndex = '1';
+            });
+            document.querySelectorAll('.motif-board').forEach((b) => {
+                b.classList.remove('selected');
+                b.style.zIndex = '0';
+            });
+        }
 
-        resultsDiv.innerHTML = `
-            <div class="analysis-section" style="text-align:center; padding:20px;">
-                <i class="fa-solid fa-triangle-exclamation" style="font-size:32px; color:#EF4444; margin-bottom:12px;"></i>
-                <h3 style="color:#EF4444;">Analysis Failed</h3>
-                <p style="font-size:13px; color:var(--text-secondary); margin-top:8px;">${escapeHtml(message)}</p>
-            </div>
-        `;
+        if (saveCloudBtn) {
+            saveCloudBtn.addEventListener('click', async () => {
+                if (!auth.currentUser) return;
+                saveCloudBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+                try {
+                    await persistBoardToCloud({ silent: false });
+                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #10B981;"></i>';
+                    setTimeout(() => {
+                        saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
+                    }, 2000);
+                } catch (error) {
+                    console.error('Save error:', error);
+                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: #EF4444;"></i>';
+                    setTimeout(() => {
+                        saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
+                    }, 2000);
+                    alert('Failed to save. Check Firestore rules for users/{yourUid}/**');
+                }
+            });
+        }
 
-        loader.classList.add('hidden');
-        resultsDiv.classList.remove('hidden');
-    }
+        wireAllJournalFrames();
 
-    if (saveCloudBtn) {
-        saveCloudBtn.addEventListener("click", async () => {
-            if (!auth.currentUser) return;
-            saveCloudBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            try {
-                await persistBoardToCloud({ silent: false });
-                saveCloudBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #10B981;"></i>';
-                setTimeout(() => {
-                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
-                }, 2000);
-            } catch (error) {
-                console.error("Error saving to cloud:", error);
-                saveCloudBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: #EF4444;"></i>';
-                setTimeout(() => {
-                    saveCloudBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i>';
-                }, 2000);
-                alert("Failed to save board. Are Firestore rules open?");
-            }
-        });
-    }
-
-    console.log("My Motif: App Initialized & Listeners Attached.");
+        console.log('My Motif: journal app ready.');
     } catch (e) {
-        alert("Fatal error during app boot: " + e.message);
+        alert('Fatal error during app boot: ' + (e.message || String(e)));
     }
 };
 
-
-
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        void initApp();
-    });
+    document.addEventListener('DOMContentLoaded', () => void initApp());
 } else {
     void initApp();
 }
