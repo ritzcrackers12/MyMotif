@@ -15,7 +15,10 @@ import {
     setDoc,
     getDoc,
     collection,
-    getDocs
+    getDocs,
+    addDoc,
+    deleteDoc,
+    serverTimestamp
 } from './firebase.js';
 import { buildCuratorSystemPrompt, buildVibeGroqOutputContract } from './curator-prompt.js';
 
@@ -414,6 +417,7 @@ const initApp = async () => {
                     if (inp.hasAttribute('value')) inp.value = inp.getAttribute('value');
                 });
                 restoreJournalSnapshotsAfterInnerHtml();
+                canvas.querySelectorAll('.motif-board').forEach((b) => b.remove());
                 await hydrateFrameEntriesFromFirestore(uid);
                 wireAllJournalFrames();
             }
@@ -519,7 +523,7 @@ const initApp = async () => {
         if (userIconBtn) {
             userIconBtn.addEventListener('click', async (e) => {
                 if (auth.currentUser) {
-                    if (!confirm('Sign out? Your board will be saved to the cloud first.')) return;
+                    if (!confirm('Sign out? Your journal will be saved to the cloud first.')) return;
                     try {
                         await persistBoardToCloud({ silent: true });
                     } catch (err) {
@@ -625,6 +629,135 @@ const initApp = async () => {
             </aside>`;
         document.body.appendChild(vibeOverlay);
 
+        const favoritesOverlay = document.createElement('div');
+        favoritesOverlay.id = 'favorites-panel-overlay';
+        favoritesOverlay.className = 'favorites-panel-overlay hidden';
+        favoritesOverlay.innerHTML = `
+            <div class="favorites-panel-backdrop" data-favorites-close="1"></div>
+            <aside class="favorites-panel-drawer" role="dialog" aria-modal="true" aria-label="Favorites">
+                <div class="favorites-panel-header">
+                    <h2 class="favorites-panel-title">Favorites</h2>
+                    <button type="button" class="icon-btn favorites-panel-close" data-favorites-close="1" title="Close"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="favorites-panel-body" id="favorites-panel-body"></div>
+            </aside>`;
+        document.body.appendChild(favoritesOverlay);
+
+        function favoritesColRef(uid) {
+            return collection(db, 'users', uid, 'favorites');
+        }
+
+        function formatFavoriteEntryHtml(it) {
+            const snap = it.snapshot || {};
+            let headline = '';
+            let links = '';
+            if (it.kind === 'artist') {
+                headline = `${snap.name || 'Artist'} — ${snap.song || ''}`;
+                const y = snap.songYoutubeUrl || '';
+                const sp = snap.searchUrl || '';
+                const sc = snap.songSoundcloudUrl || '';
+                const parts = [];
+                if (y) parts.push(`<a href="${escapeHtml(y)}" target="_blank" rel="noopener noreferrer">YouTube</a>`);
+                if (sp) parts.push(`<a href="${escapeHtml(sp)}" target="_blank" rel="noopener noreferrer">Spotify</a>`);
+                if (sc) parts.push(`<a href="${escapeHtml(sc)}" target="_blank" rel="noopener noreferrer">SoundCloud</a>`);
+                links = parts.length ? `<p class="favorites-links">${parts.join(' · ')}</p>` : '';
+            } else {
+                headline = `${snap.type || 'Art'} — ${snap.name || '—'}`;
+                const fu = snap.findUrl || '';
+                links = fu
+                    ? `<p class="favorites-links"><a href="${escapeHtml(fu)}" target="_blank" rel="noopener noreferrer">Find it</a></p>`
+                    : '';
+            }
+            const reason = escapeHtml(String(snap.reason || ''));
+            const snippet = it.journalSnippet
+                ? `<p class="favorites-journal-snippet"><em>From your journal:</em> ${escapeHtml(it.journalSnippet)}</p>`
+                : '';
+            return `<article class="favorites-entry">
+                <div class="favorites-entry-top">
+                    <span class="favorites-entry-kind">${escapeHtml(it.kind === 'artist' ? 'Music' : 'Art')}</span>
+                    <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove from favorites"><i class="fa-solid fa-trash"></i></button>
+                </div>
+                <h4 class="favorites-entry-title">${escapeHtml(headline)}</h4>
+                <p class="favorites-entry-body">${reason}</p>
+                ${snippet}
+                ${links}
+            </article>`;
+        }
+
+        async function renderFavoritesPanelContent() {
+            const body = document.getElementById('favorites-panel-body');
+            if (!body) return;
+            const user = auth.currentUser;
+            if (!user) {
+                body.innerHTML = '<p class="favorites-empty">Sign in to save and view favorites.</p>';
+                return;
+            }
+            body.innerHTML = '<div class="favorites-loading"><i class="fa-solid fa-spinner fa-spin"></i><span> Loading…</span></div>';
+            try {
+                const snap = await getDocs(favoritesColRef(user.uid));
+                const items = [];
+                snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
+                items.sort((a, b) => {
+                    const ta = a.savedAt?.toMillis ? a.savedAt.toMillis() : 0;
+                    const tb = b.savedAt?.toMillis ? b.savedAt.toMillis() : 0;
+                    return tb - ta;
+                });
+                const byMood = new Map();
+                for (const it of items) {
+                    const m = String(it.mood || 'Uncategorized').trim() || 'Uncategorized';
+                    if (!byMood.has(m)) byMood.set(m, []);
+                    byMood.get(m).push(it);
+                }
+                const moods = [...byMood.keys()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+                if (moods.length === 0) {
+                    body.innerHTML =
+                        '<p class="favorites-empty">No favorites yet. Run &ldquo;Find your vibe&rdquo; and tap the heart on a suggestion.</p>';
+                    return;
+                }
+                let html = '<div class="favorites-doc">';
+                for (const mood of moods) {
+                    html += `<h3 class="favorites-mood-heading">${escapeHtml(mood)}</h3>`;
+                    for (const it of byMood.get(mood)) {
+                        html += formatFavoriteEntryHtml(it);
+                    }
+                }
+                html += '</div>';
+                body.innerHTML = html;
+                body.querySelectorAll('[data-delete-favorite]').forEach((btn) => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-delete-favorite');
+                        if (!id || !auth.currentUser) return;
+                        btn.disabled = true;
+                        try {
+                            await deleteDoc(doc(db, 'users', auth.currentUser.uid, 'favorites', id));
+                            await renderFavoritesPanelContent();
+                        } catch (err) {
+                            alert(err.message || String(err));
+                            btn.disabled = false;
+                        }
+                    });
+                });
+            } catch (e) {
+                body.innerHTML = `<p class="favorites-error">${escapeHtml(e.message || String(e))}</p>`;
+            }
+        }
+
+        function openFavoritesPanel() {
+            favoritesOverlay.classList.remove('hidden');
+            void renderFavoritesPanelContent();
+        }
+
+        function closeFavoritesPanel() {
+            favoritesOverlay.classList.add('hidden');
+        }
+
+        favoritesOverlay.addEventListener('click', (e) => {
+            if (e.target.closest('[data-favorites-close="1"]')) closeFavoritesPanel();
+        });
+
+        const favoritesOpenBtn = document.getElementById('favorites-open-btn');
+        if (favoritesOpenBtn) favoritesOpenBtn.addEventListener('click', () => openFavoritesPanel());
+
         const vibeStage = vibeOverlay.querySelector('#vibe-panel-stage');
         vibeOverlay.addEventListener('click', (e) => {
             if (e.target.closest('[data-vibe-close="1"]')) closeVibePanel();
@@ -652,6 +785,39 @@ const initApp = async () => {
 
         function setVibeStage(html) {
             vibeStage.innerHTML = html;
+        }
+
+        async function saveFavoriteFromVibe(kind) {
+            const user = auth.currentUser;
+            if (!user) {
+                alert('Sign in to save favorites.');
+                return;
+            }
+            const r = vibeState.rec;
+            if (!r || typeof r !== 'object') return;
+            let snapshot = null;
+            if (kind === 'artist') snapshot = r.artist ? JSON.parse(JSON.stringify(r.artist)) : null;
+            else if (kind === 'art1') snapshot = r.art1 ? JSON.parse(JSON.stringify(r.art1)) : null;
+            else if (kind === 'art2') snapshot = r.art2 ? JSON.parse(JSON.stringify(r.art2)) : null;
+            if (!snapshot) return;
+            const mood = String(vibeState.primaryEmotion || '').trim() || 'Uncategorized';
+            try {
+                await addDoc(favoritesColRef(user.uid), {
+                    mood,
+                    kind,
+                    journalSnippet: String(vibeState.entry || '').slice(0, 400),
+                    snapshot,
+                    savedAt: serverTimestamp()
+                });
+                const btn = vibeStage.querySelector(`[data-vibe-favorite="${kind}"]`);
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-heart" aria-hidden="true"></i>';
+                    btn.classList.add('vibe-favorite-btn--saved');
+                    btn.title = 'Saved to favorites';
+                }
+            } catch (err) {
+                alert(err.message || String(err));
+            }
         }
 
         /** Curator + task + Groq output contract (link rules, close reading, schema hints). */
@@ -810,6 +976,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 ${emo}
                 <div class="vibe-results-stack">
                     <div class="vibe-rec-card vibe-rec-card--artist" data-card="artist">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="artist" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="artist" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner vibe-card-inner--artist" id="vibe-card-artist-inner">
                             <p class="vibe-card-kicker">Artist</p>
@@ -825,6 +992,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                         </div>
                     </div>
                     <div class="vibe-rec-card" data-card="art1">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art1" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art1" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art1-inner">
                             <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.type || '')}</span></p>
@@ -834,6 +1002,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                         </div>
                     </div>
                     <div class="vibe-rec-card" data-card="art2">
+                        <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art2" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art2" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art2-inner">
                             <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.type || '')}</span></p>
@@ -857,6 +1026,14 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             });
             vibeStage.querySelector('[data-vibe-link="art2"]')?.addEventListener('click', () => {
                 if (art2Url) window.open(art2Url, '_blank', 'noopener,noreferrer');
+            });
+
+            vibeStage.querySelectorAll('[data-vibe-favorite]').forEach((btn) => {
+                btn.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    const k = btn.getAttribute('data-vibe-favorite');
+                    if (k === 'artist' || k === 'art1' || k === 'art2') void saveFavoriteFromVibe(k);
+                });
             });
 
             vibeStage.querySelectorAll('.vibe-reshuffle').forEach((b) => {
@@ -1023,7 +1200,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 toolBtns.forEach((b) => b.classList.remove('active'));
                 btn.classList.add('active');
                 currentTool = btn.dataset.tool;
-                if (currentTool === 'frame' || currentTool === 'board') boardContainer.style.cursor = 'crosshair';
+                if (currentTool === 'journal') boardContainer.style.cursor = 'crosshair';
                 else if (currentTool === 'pan') boardContainer.style.cursor = 'grab';
                 else boardContainer.style.cursor = 'default';
             });
@@ -1089,8 +1266,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             }
             if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
                 if (e.key.toLowerCase() === 'v') setTool('select');
-                if (e.key.toLowerCase() === 'b') setTool('board');
-                if (e.key.toLowerCase() === 'f') setTool('frame');
+                if (e.key.toLowerCase() === 'j') setTool('journal');
             }
             if (e.key === 'Backspace' || e.key === 'Delete') {
                 if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
@@ -1125,7 +1301,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             const targetEl = rawT instanceof Element ? rawT : rawT && rawT.parentElement;
             if (!(targetEl instanceof Element)) return;
             if (targetEl.closest('.top-toolbar')) return;
-            if (targetEl.closest('#vibe-panel-overlay')) return;
+            if (targetEl.closest('#vibe-panel-overlay') || targetEl.closest('#favorites-panel-overlay')) return;
 
             const rect = canvas.getBoundingClientRect();
             const pointerX = (e.clientX - rect.left) / scale;
@@ -1146,7 +1322,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
 
             const deleteBtnEarly = targetEl.closest('.delete-btn');
             if (deleteBtnEarly) {
-                const parentEl = deleteBtnEarly.closest('.motif-frame, .motif-board');
+                const parentEl = deleteBtnEarly.closest('.motif-frame');
                 if (parentEl) {
                     saveStateSafe();
                     parentEl.remove();
@@ -1158,13 +1334,12 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 targetEl.closest('.find-vibe-btn') ||
                 targetEl.closest('.journal-entry-textarea') ||
                 targetEl.closest('.journal-toolbar') ||
-                targetEl.closest('.frame-header input') ||
-                targetEl.closest('.board-header input')
+                targetEl.closest('.frame-header input')
             ) {
                 return;
             }
 
-            if (currentTool === 'frame' || currentTool === 'board') {
+            if (currentTool === 'journal') {
                 isDrawing = true;
                 dragStartX = pointerX;
                 dragStartY = pointerY;
@@ -1174,13 +1349,8 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 ghost.style.top = dragStartY + 'px';
                 ghost.style.width = '0px';
                 ghost.style.height = '0px';
-                if (currentTool === 'board') {
-                    ghost.style.borderStyle = 'dashed';
-                    ghost.style.background = 'rgba(243, 244, 246, 0.4)';
-                } else {
-                    ghost.style.borderStyle = 'solid';
-                    ghost.style.background = 'rgba(107, 92, 231, 0.1)';
-                }
+                ghost.style.borderStyle = 'solid';
+                ghost.style.background = 'rgba(107, 92, 231, 0.1)';
                 deselectAll();
                 return;
             }
@@ -1189,21 +1359,17 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             const frameHeader = targetEl.closest('.frame-header');
             const frameBody = targetEl.closest('.frame-body');
             const frame = targetEl.closest('.motif-frame');
-            const boardResizeHandle = targetEl.closest('.board-resize-handle');
-            const boardHeader = targetEl.closest('.board-header');
-            const board = targetEl.closest('.motif-board');
 
             if (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.closest('.journal-entry-textarea')) {
                 if (frame) selectElement(frame, 'frame');
-                if (board) selectElement(board, 'board');
                 return;
             }
 
             if (individualDragHandle) {
-                const parentElement = individualDragHandle.closest('.motif-frame, .motif-board');
+                const parentElement = individualDragHandle.closest('.motif-frame');
                 if (parentElement) {
                     startDrag(e, parentElement, 'move', pointerX, pointerY, true);
-                    selectElement(parentElement, parentElement.classList.contains('motif-frame') ? 'frame' : 'board');
+                    selectElement(parentElement, 'frame');
                 }
             } else if (frameResizeHandle) {
                 startDrag(e, frame, 'resize', pointerX, pointerY, executeIndividualMove);
@@ -1214,34 +1380,8 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 selectElement(frame, 'frame');
             } else if (frame) {
                 selectElement(frame, 'frame');
-            } else if (boardResizeHandle) {
-                startDrag(e, board, 'resize', pointerX, pointerY, executeIndividualMove);
-            } else if (boardHeader) {
-                startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
-                selectElement(board, 'board');
-            } else if (board && !targetEl.closest('.motif-frame')) {
-                startDrag(e, board, 'move', pointerX, pointerY, executeIndividualMove);
-                selectElement(board, 'board');
             } else deselectAll();
         });
-
-        function getContainedNodes(boardEl) {
-            const contained = [];
-            const bx = parseFloat(boardEl.style.left);
-            const by = parseFloat(boardEl.style.top);
-            const bw = parseFloat(boardEl.style.width);
-            const bh = parseFloat(boardEl.style.height);
-            document.querySelectorAll('.motif-frame').forEach((node) => {
-                const nx = parseFloat(node.style.left);
-                const ny = parseFloat(node.style.top);
-                const nw = parseFloat(node.style.width) || node.offsetWidth;
-                const nh = parseFloat(node.style.height) || node.offsetHeight;
-                const cx = nx + nw / 2;
-                const cy = ny + nh / 2;
-                if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) contained.push(node);
-            });
-            return contained;
-        }
 
         function startDrag(e, element, type, px, py, isDoubleClickDrag = false) {
             draggingElement = element;
@@ -1254,34 +1394,6 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             initialWidth = parseFloat(element.style.width) || element.offsetWidth;
             initialHeight = parseFloat(element.style.height) || element.offsetHeight;
             containedElementsToMove = [];
-            if (type === 'move' && !isDoubleClickDrag) {
-                let boardContext = null;
-                if (element.classList.contains('motif-board')) boardContext = element;
-                else if (element.classList.contains('motif-frame')) {
-                    const cx = initialLeft + initialWidth / 2;
-                    const cy = initialTop + initialHeight / 2;
-                    document.querySelectorAll('.motif-board').forEach((b) => {
-                        const bx = parseFloat(b.style.left);
-                        const by = parseFloat(b.style.top);
-                        const bw = parseFloat(b.style.width) || b.offsetWidth;
-                        const bh = parseFloat(b.style.height) || b.offsetHeight;
-                        if (cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh) boardContext = b;
-                    });
-                }
-                if (boardContext) {
-                    draggingElement = boardContext;
-                    initialLeft = parseFloat(boardContext.style.left) || 0;
-                    initialTop = parseFloat(boardContext.style.top) || 0;
-                    initialWidth = parseFloat(boardContext.style.width) || boardContext.offsetWidth;
-                    initialHeight = parseFloat(boardContext.style.height) || boardContext.offsetHeight;
-                    containedElementsToMove = getContainedNodes(boardContext).map((el) => ({
-                        el,
-                        left: parseFloat(el.style.left),
-                        top: parseFloat(el.style.top)
-                    }));
-                    selectElement(boardContext, 'board');
-                }
-            }
             e.stopPropagation();
         }
 
@@ -1345,8 +1457,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                 const top = parseFloat(ghost.style.top);
                 if (width > 50 && height > 50) {
                     saveStateSafe();
-                    if (currentTool === 'board') createBoardAt(left, top, width, height);
-                    else if (currentTool === 'frame') createFrameAt(left, top, width, height);
+                    if (currentTool === 'journal') createFrameAt(left, top, width, height);
                 }
                 setTool('select');
             }
@@ -1354,28 +1465,6 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             dragType = null;
             containedElementsToMove = [];
         });
-
-        function createBoardAt(x, y, w, h) {
-            const boardId = 'board-' + Date.now();
-            const board = document.createElement('div');
-            board.className = 'motif-board';
-            board.id = boardId;
-            board.style.left = x + 'px';
-            board.style.top = y + 'px';
-            board.style.width = w + 'px';
-            board.style.height = h + 'px';
-            board.style.zIndex = '0';
-            board.innerHTML = `
-            <div class="board-header">
-                <input type="text" class="board-title" value="New Board">
-                <button type="button" class="delete-btn"><i class="fa-solid fa-trash"></i></button>
-            </div>
-            <div class="board-resize-handle"></div>
-            <div class="individual-drag-handle" title="Move Individually"></div>`;
-            canvas.appendChild(board);
-            selectElement(board, 'board');
-            scheduleCloudSave();
-        }
 
         function createFrameAt(x, y, w, h) {
             const frameId = 'frame-' + Date.now();
@@ -1411,17 +1500,12 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             deselectAll();
             el.classList.add('selected');
             if (type === 'frame') el.style.zIndex = '10';
-            else if (type === 'board') el.style.zIndex = '0';
         }
 
         function deselectAll() {
             document.querySelectorAll('.motif-frame').forEach((f) => {
                 f.classList.remove('selected');
                 f.style.zIndex = '1';
-            });
-            document.querySelectorAll('.motif-board').forEach((b) => {
-                b.classList.remove('selected');
-                b.style.zIndex = '0';
             });
         }
 

@@ -34,5 +34,10 @@ service cloud.firestore {
       allow read: if isOwner(legacyUserId);
       allow write: if isOwner(legacyUserId);
     }
+
+    /** Saved vibe suggestions (per card: artist, art1, art2), grouped by mood in the UI */
+    match /users/{userId}/favorites/{favoriteId} {
+      allow read, write: if isOwner(userId);
+    }
   }
 }
