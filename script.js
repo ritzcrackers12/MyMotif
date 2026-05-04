@@ -1621,12 +1621,28 @@ Avoid repeating: "${avoidName}"`;
             return `${m}:${String(s).padStart(2, '0')}`;
         }
 
-        /** Green slime doodle under the loading timer; delayed stroke = snake trail. Returns cleanup. */
-        function attachVibeLoadingSlimeDoodle() {
+        /** Maps remaining seconds (60→0) to green→red for slime strokes. */
+        function slimeStrokeStyleFromSeconds(sec) {
+            const t = Math.max(0, Math.min(1, sec / 60));
+            const from = { r: 34, g: 197, b: 94 };
+            const to = { r: 239, g: 68, b: 68 };
+            const R = Math.round(to.r * (1 - t) + from.r * t);
+            const Gch = Math.round(to.g * (1 - t) + from.g * t);
+            const B = Math.round(to.b * (1 - t) + from.b * t);
+            return {
+                stroke: `rgb(${R},${Gch},${B})`,
+                shadow: `rgba(${R},${Gch},${B},0.5)`
+            };
+        }
+
+        /**
+         * Slime doodle: delayed snake trail, color from loadingUi.secondsLeft (green→red).
+         * After 0:00, loadingUi.flashBlank toggles to flash blank vs drawing until disposed.
+         */
+        function attachVibeLoadingSlimeDoodle(loadingUi) {
             const canvas = document.getElementById('vibe-loading-canvas');
             if (!canvas || !canvas.getContext) return () => {};
             const ctx = canvas.getContext('2d');
-            const SLIME_GREEN = '#22c55e';
             const TRAIL_LAG_MS = 115;
             const MAX_POINTS_PER_STROKE = 600;
             let logicalW = 320;
@@ -1669,12 +1685,20 @@ Avoid repeating: "${avoidName}"`;
             function paint() {
                 const now = performance.now();
                 ctx.clearRect(0, 0, logicalW, logicalH);
+                const sec = loadingUi && typeof loadingUi.secondsLeft === 'number' ? loadingUi.secondsLeft : 60;
+                const flashBlank =
+                    loadingUi && sec <= 0 && loadingUi.flashBlank === true;
+                if (flashBlank) {
+                    rafId = requestAnimationFrame(paint);
+                    return;
+                }
+                const { stroke: strokeCol, shadow: shadowCol } = slimeStrokeStyleFromSeconds(sec);
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
-                ctx.strokeStyle = SLIME_GREEN;
-                ctx.fillStyle = SLIME_GREEN;
+                ctx.strokeStyle = strokeCol;
+                ctx.fillStyle = strokeCol;
                 ctx.lineWidth = 3;
-                ctx.shadowColor = 'rgba(34, 197, 94, 0.45)';
+                ctx.shadowColor = shadowCol;
                 ctx.shadowBlur = 6;
 
                 for (const stroke of strokes) {
@@ -1759,6 +1783,10 @@ Avoid repeating: "${avoidName}"`;
                 cancelAnimationFrame(rafId);
                 window.removeEventListener('resize', resize);
                 if (ro) ro.disconnect();
+                if (loadingUi && loadingUi.flashIntervalId) {
+                    clearInterval(loadingUi.flashIntervalId);
+                    loadingUi.flashIntervalId = null;
+                }
                 canvas.removeEventListener('pointerdown', onDown, listenerOpts);
                 canvas.removeEventListener('pointermove', onMove, listenerOpts);
                 canvas.removeEventListener('pointerup', onUp);
@@ -1788,6 +1816,12 @@ Avoid repeating: "${avoidName}"`;
             const slimeServersMsg =
                 'SlimeServers are still connecting... wait 1 more second for me 5';
             let secondsLeft = 60;
+            const loadingUi = {
+                secondsLeft: 60,
+                flashBlank: false,
+                flashIntervalId: null,
+                flashStarted: false
+            };
             setVibeStage(`<div class="vibe-loading" id="vibe-loading-root">
                 <p class="vibe-loading-summon-hint">click and drag on this canvas to summon that slime</p>
                 <div class="vibe-loading-head">
@@ -1799,19 +1833,27 @@ Avoid repeating: "${avoidName}"`;
                     <canvas class="vibe-loading-canvas" id="vibe-loading-canvas" role="img" aria-label="Slime drawing canvas"></canvas>
                 </div>
             </div>`);
-            const disposeLoadingDoodle = attachVibeLoadingSlimeDoodle();
+            const disposeLoadingDoodle = attachVibeLoadingSlimeDoodle(loadingUi);
             let countdownIntervalId = null;
             const tick = () => {
                 const cd = document.getElementById('vibe-countdown-display');
                 const st = document.getElementById('vibe-loading-status');
                 if (!cd) return;
                 secondsLeft -= 1;
+                loadingUi.secondsLeft = Math.max(0, secondsLeft);
                 if (secondsLeft > 0) {
                     cd.textContent = formatVibeLoadingCountdown(secondsLeft);
                     if (st) st.textContent = '';
                 } else {
                     cd.textContent = '0:00';
                     if (st) st.textContent = slimeServersMsg;
+                    if (!loadingUi.flashStarted) {
+                        loadingUi.flashStarted = true;
+                        loadingUi.flashBlank = false;
+                        loadingUi.flashIntervalId = setInterval(() => {
+                            loadingUi.flashBlank = !loadingUi.flashBlank;
+                        }, 480);
+                    }
                 }
             };
             countdownIntervalId = setInterval(tick, 1000);
