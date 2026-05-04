@@ -24,6 +24,11 @@ service cloud.firestore {
       match /frames/{frameId} {
         allow read, write: if isOwner(userId);
       }
+
+      /** Saved vibe hearts (nested under workspace board — same access as frames) */
+      match /favorites/{favoriteId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
     /**
@@ -35,9 +40,5 @@ service cloud.firestore {
       allow write: if isOwner(legacyUserId);
     }
 
-    /** Saved vibe suggestions (per card: artist, art1, art2), grouped by mood in the UI */
-    match /users/{userId}/favorites/{favoriteId} {
-      allow read, write: if isOwner(userId);
-    }
   }
 }

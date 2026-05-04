@@ -73,7 +73,13 @@ EMOTIONAL SCENE MAP (route every rec):
 7 RAW/SOUTHERN GOTHIC — NBA YoungBoy Kodak 9lokknine | FL/LA unfiltered confession Southern Gothic | art: devotional Sally Mann Eggleston letters murals Baton Rouge | keys: raw pain God loyalty spiritual unfiltered
 8 FLEX/COME-UP — Migos PradaBagShawty LiL2Posh BIGBABYGUCCI Che Dragnutz | celebratory trap triumph | art: hypercolor Jeff Koons Virgil Wiley club flash | keys: win flex drip money motion energy
 
-ROUTING: Match primary emotion to scene (not keywords alone). Heartbreak→1 not 6; chaotic brain→5 not 7. Micro-details beat generic themes. Pick one real song title from that scene's artists; use Genius/Reddit internally — never justify the song in reason fields.
+ROUTING: Match primary emotion to scene (not keywords alone). Heartbreak→1 not 6; chaotic brain→5 not 7. Micro-details beat generic themes.
+
+SONG MUST BE REAL (zero hallucinations):
+- \`artist.song\` must be a **real, released track** on mainstream streaming (Spotify / Apple Music / YouTube Music) by \`artist.name\`.
+- Use the **exact** official title spelling. Never invent, blend, or “sound-alike” fake titles. If you are not 100% sure a track exists, pick a **different** well-known track from the same artist you are certain about, or switch to another artist in the **same scene row** whose discography you know.
+- No unreleased leaks, no made-up collabs, no fan titles. When in doubt, choose a more famous single from that artist in the same emotional lane.
+- Use Genius/Reddit only to **confirm** a real title, not to fabricate. Never justify the pick in \`reason\` fields.
 
 USER-FACING REASONS (artist.reason, art1.reason, art2.reason): Only their journal — quote their words. Forbidden: song title, lyrics, "this track," tying text to the pick. Choose art from the scene's art-world row + user's specifics; written reasons stay journal-only.
 
@@ -86,7 +92,7 @@ JSON only. No markdown or preamble.`;
 export function buildVibeGroqOutputContract() {
     return `OUTPUT: Valid JSON only.
 
-Artist: searchUrl="spotify"; songYoutubeUrl=watch URL or null; songSoundcloudUrl=null; albumCover=watch URL for thumb/embed or null.
+Artist: searchUrl="spotify"; songYoutubeUrl=watch URL or null; songSoundcloudUrl=null; albumCover=null (optional). \`artist.song\` = verifiable real track only (see system prompt).
 
 Art findUrl: allowed — YouTube/Vimeo search, artsandculture.google.com, archive.org, MoMA/Met/Tate, google isch, or known roots patatap.com radio.garden windows93.net theQuietPlace.xyz neal.fun. No blogs/news/medium.
 

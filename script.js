@@ -150,6 +150,20 @@ function framesCollection(uid) {
     return collection(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID, 'frames');
 }
 
+/** Heart saves — under same workspace doc as frames (Firestore rules must allow this subcollection). */
+function favoritesCollection(uid) {
+    return collection(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID, 'favorites');
+}
+
+function favoriteDoc(uid, favoriteId) {
+    return doc(db, 'users', uid, 'boards', WORKSPACE_BOARD_ID, 'favorites', favoriteId);
+}
+
+function truncSnippet(s, max) {
+    const t = String(s || '');
+    return t.length <= max ? t : `${t.slice(0, max)}…`;
+}
+
 async function ensureAuthPersistence() {
     const tiers = [
         ['local', browserLocalPersistence],
@@ -637,16 +651,19 @@ const initApp = async () => {
             </aside>`;
         document.body.appendChild(favoritesOverlay);
 
-        function favoritesColRef(uid) {
-            return collection(db, 'users', uid, 'favorites');
-        }
-
         function formatFavoriteEntryHtml(it) {
             const snap = it.snapshot || {};
-            let headline = '';
-            let links = '';
+            const promptRaw = it.promptRecap || it.journalSnippet || '';
+            const promptShown = escapeHtml(truncSnippet(promptRaw, 420));
+            const metaBlock = promptRaw
+                ? `<div class="favorites-doc-meta">
+                    <p class="favorites-doc-row favorites-doc-prompt"><span class="favorites-doc-label">What you wrote</span> ${promptShown}</p>
+                  </div>`
+                : '';
+
             if (it.kind === 'artist') {
-                headline = `${snap.name || 'Artist'} — ${snap.song || ''}`;
+                const song = escapeHtml(String(snap.song || '—'));
+                const artist = escapeHtml(String(snap.name || ''));
                 const y = snap.songYoutubeUrl || '';
                 const sp = snap.searchUrl || '';
                 const sc = snap.songSoundcloudUrl || '';
@@ -654,27 +671,34 @@ const initApp = async () => {
                 if (y) parts.push(`<a href="${escapeHtml(y)}" target="_blank" rel="noopener noreferrer">YouTube</a>`);
                 if (sp) parts.push(`<a href="${escapeHtml(sp)}" target="_blank" rel="noopener noreferrer">Spotify</a>`);
                 if (sc) parts.push(`<a href="${escapeHtml(sc)}" target="_blank" rel="noopener noreferrer">SoundCloud</a>`);
-                links = parts.length ? `<p class="favorites-links">${parts.join(' · ')}</p>` : '';
-            } else {
-                headline = `${snap.type || 'Art'} — ${snap.name || '—'}`;
-                const fu = snap.findUrl || '';
-                links = fu
-                    ? `<p class="favorites-links"><a href="${escapeHtml(fu)}" target="_blank" rel="noopener noreferrer">Find it</a></p>`
-                    : '';
+                const streams = parts.length ? `<p class="favorites-links">${parts.join(' · ')}</p>` : '';
+                return `<article class="favorites-entry favorites-entry--music">
+                    ${metaBlock}
+                    <div class="favorites-entry-top">
+                        <span class="favorites-entry-kind">Music</span>
+                        <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <h4 class="favorites-primary-line"><span class="favorites-song-title">${song}</span><span class="favorites-by"> — ${artist}</span></h4>
+                    ${streams}
+                </article>`;
             }
-            const reason = escapeHtml(String(snap.reason || ''));
-            const snippet = it.journalSnippet
-                ? `<p class="favorites-journal-snippet"><em>From your journal:</em> ${escapeHtml(it.journalSnippet)}</p>`
-                : '';
-            return `<article class="favorites-entry">
+
+            const fu = String(snap.findUrl || '').trim();
+            const artName = String(snap.name || '—');
+            const artType = String(snap.type || 'Art');
+            const titleHtml = fu
+                ? `<h4 class="favorites-primary-line"><a class="favorites-title-link" href="${escapeHtml(fu)}" target="_blank" rel="noopener noreferrer">${escapeHtml(artName)}</a> <span class="favorites-art-type">(${escapeHtml(artType)})</span></h4>`
+                : `<h4 class="favorites-primary-line">${escapeHtml(artName)} <span class="favorites-art-type">(${escapeHtml(artType)})</span></h4>`;
+            const reasonShort = escapeHtml(truncSnippet(String(snap.reason || ''), 320));
+
+            return `<article class="favorites-entry favorites-entry--art">
+                ${metaBlock}
                 <div class="favorites-entry-top">
-                    <span class="favorites-entry-kind">${escapeHtml(it.kind === 'artist' ? 'Music' : 'Art')}</span>
-                    <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove from favorites"><i class="fa-solid fa-trash"></i></button>
+                    <span class="favorites-entry-kind">Art</span>
+                    <button type="button" class="favorites-delete-btn icon-btn" data-delete-favorite="${escapeHtml(it.id)}" title="Remove"><i class="fa-solid fa-trash"></i></button>
                 </div>
-                <h4 class="favorites-entry-title">${escapeHtml(headline)}</h4>
-                <p class="favorites-entry-body">${reason}</p>
-                ${snippet}
-                ${links}
+                ${titleHtml}
+                ${reasonShort ? `<p class="favorites-entry-note">${reasonShort}</p>` : ''}
             </article>`;
         }
 
@@ -688,7 +712,7 @@ const initApp = async () => {
             }
             body.innerHTML = '<div class="favorites-loading"><i class="fa-solid fa-spinner fa-spin"></i><span> Loading…</span></div>';
             try {
-                const snap = await getDocs(favoritesColRef(user.uid));
+                const snap = await getDocs(favoritesCollection(user.uid));
                 const items = [];
                 snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
                 items.sort((a, b) => {
@@ -708,7 +732,8 @@ const initApp = async () => {
                         '<p class="favorites-empty">No favorites yet. Run &ldquo;Find your vibe&rdquo; and tap the heart on a suggestion.</p>';
                     return;
                 }
-                let html = '<div class="favorites-doc">';
+                let html =
+                    '<p class="favorites-doc-intro">Saved by <strong>mood</strong> — each card shows what you wrote that session and what you saved (music with streaming links, or art as a title link).</p><div class="favorites-doc">';
                 for (const mood of moods) {
                     html += `<h3 class="favorites-mood-heading">${escapeHtml(mood)}</h3>`;
                     for (const it of byMood.get(mood)) {
@@ -723,7 +748,7 @@ const initApp = async () => {
                         if (!id || !auth.currentUser) return;
                         btn.disabled = true;
                         try {
-                            await deleteDoc(doc(db, 'users', auth.currentUser.uid, 'favorites', id));
+                            await deleteDoc(favoriteDoc(auth.currentUser.uid, id));
                             await renderFavoritesPanelContent();
                         } catch (err) {
                             alert(err.message || String(err));
@@ -796,10 +821,10 @@ const initApp = async () => {
             if (!snapshot) return;
             const mood = String(vibeState.primaryEmotion || '').trim() || 'Uncategorized';
             try {
-                await addDoc(favoritesColRef(user.uid), {
+                await addDoc(favoritesCollection(user.uid), {
                     mood,
                     kind,
-                    journalSnippet: String(vibeState.entry || '').slice(0, 400),
+                    promptRecap: String(vibeState.entry || '').slice(0, 500),
                     snapshot,
                     savedAt: serverTimestamp()
                 });
@@ -810,7 +835,15 @@ const initApp = async () => {
                     btn.title = 'Saved to favorites';
                 }
             } catch (err) {
-                alert(err.message || String(err));
+                const code = err && err.code;
+                const msg = err && err.message ? err.message : String(err);
+                if (code === 'permission-denied' || /insufficient permissions/i.test(msg)) {
+                    alert(
+                        'Could not save to the cloud (permission denied). Deploy the latest Firestore rules from this project:\n\nfirebase deploy --only firestore:rules'
+                    );
+                } else {
+                    alert(msg);
+                }
             }
         }
 
@@ -856,7 +889,7 @@ const initApp = async () => {
         }
 
         async function runVibeJournalToRecommendations(entryText) {
-            const userPrompt = `Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). Pick one real song title from the routed scene (internal fit). art2 type ≠ art1.
+            const userPrompt = `Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). You MUST output artist.song as a real released track (exact title) that exists on streaming for that artist — never invent titles. art2 type ≠ art1.
 
 JSON shape:
 {"primaryEmotion":"","artist":{"name":"","song":"","albumCover":null,"songYoutubeUrl":null,"songSoundcloudUrl":null,"reason":"","searchUrl":"spotify"},"art1":{"name":"","type":"","reason":"","findUrl":""},"art2":{"name":"","type":"","reason":"","findUrl":""},"searchTrails":["","",""],"searchUrls":["","",""]}
@@ -897,7 +930,7 @@ ${entryText}
                       ? 'art1 (must stay a different category than art2 after replacement)'
                       : 'art2 (must stay a different category than art1 after replacement)';
             const currentJson = compactVibeRecForPrompt(vibeState.rec);
-            const userPrompt = `Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = new song title; reasons journal-only.
+            const userPrompt = `Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = another **real** released song (exact title on streaming); reasons journal-only.
 
 Journal: ${entryText}
 Emotion: ${emotion}
