@@ -652,6 +652,10 @@ SEARCH TRAILS (critical)
 
 The reason fields should quote SPECIFIC words or phrases from the journal entry, then connect them to the recommended **song’s** story (with Genius/Reddit-quality specificity).
 
+ART (art1 & art2) — hard requirements for every response
+- Art must still fit the **general underground rap / curator-list vibe** of the music pick (not unrelated aesthetic worlds).
+- In each art **reason**, make explicit: (1) the **story** the suggested song tells + the story the user told — do they align? (2) **why** that pairing works (not generic “it fits the mood”). (3) what the track **sounds** like (sonic texture in plain language). (4) how that **translates visually** into this specific work / search. (5) does the visual match **their** narrative — yes/no and how.
+
 Return ONLY this JSON, nothing else:
 {
   "primaryEmotion": string,
