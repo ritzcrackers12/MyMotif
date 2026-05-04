@@ -534,7 +534,8 @@ const initApp = async () => {
         }
 
         const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
-        const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile'];
+        /** Order: primary 70B-class, OSS fallback (Groq-recommended), fast instant. Never use deprecated llama-3.1-70b-versatile. */
+        const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'];
 
         const GROQ_FETCH_TIMEOUT_MS = 75000;
 
@@ -577,7 +578,9 @@ const initApp = async () => {
                     const errBody = data.error?.message || '';
                     const modelBad =
                         response.status === 404 ||
-                        /model.*not found|does not exist|invalid model|unknown model/i.test(errBody);
+                        /model.*not found|does not exist|invalid model|unknown model|decommissioned|no longer supported|deprecated/i.test(
+                            errBody
+                        );
                     if (modelBad) {
                         lastMessage = errBody || `HTTP ${response.status} (${model})`;
                         break;
