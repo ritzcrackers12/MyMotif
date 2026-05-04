@@ -352,8 +352,9 @@ const initApp = async () => {
             typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
             window.MYMOTIF_GEMINI_API_KEY.trim();
         const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
-        /** Older `-latest` IDs often 404; try in order until one accepts the key. */
-        const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+        /** Stable IDs for generateContent; no `flash-8b` (Vertex-only / not on AI Studio v1). */
+        const GEMINI_API_VERSION = 'v1beta';
+        const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
         const GEMINI_FETCH_TIMEOUT_MS = 75000;
 
@@ -371,7 +372,7 @@ const initApp = async () => {
             let lastMessage = '';
             const maxAttempts = 4;
             for (const model of GEMINI_MODELS) {
-                const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+                const url = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
                     const controller = new AbortController();
                     const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
