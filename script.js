@@ -659,62 +659,49 @@ const initApp = async () => {
             return `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}\n\n${buildVibeGroqOutputContract()}`;
         }
 
+        /** Truncate long reasons in reshuffle payload to save input tokens. */
+        function compactVibeRecForPrompt(rec, maxReasonChars = 200) {
+            if (!rec || typeof rec !== 'object') return '{}';
+            const cut = (s) => {
+                const t = String(s ?? '');
+                return t.length <= maxReasonChars ? t : `${t.slice(0, maxReasonChars)}…`;
+            };
+            const pack = (art) =>
+                art && typeof art === 'object'
+                    ? {
+                          name: art.name,
+                          type: art.type,
+                          reason: cut(art.reason),
+                          findUrl: art.findUrl
+                      }
+                    : art;
+            const a = rec.artist;
+            return JSON.stringify({
+                artist: a
+                    ? {
+                          name: a.name,
+                          song: a.song,
+                          albumCover: a.albumCover,
+                          songYoutubeUrl: a.songYoutubeUrl,
+                          songSoundcloudUrl: a.songSoundcloudUrl,
+                          reason: cut(a.reason),
+                          searchUrl: a.searchUrl
+                      }
+                    : undefined,
+                art1: pack(rec.art1),
+                art2: pack(rec.art2),
+                searchTrails: rec.searchTrails,
+                searchUrls: rec.searchUrls
+            });
+        }
+
         async function runVibeJournalToRecommendations(entryText) {
-            const userPrompt = `You are doing CLOSE READING of this journal entry, not summarizing it.
-Your job is to find SPECIFIC DETAILS in **their** writing — not general vibes.
+            const userPrompt = `Close-read the journal: quote their phrases in reasons; reasons = journal-only (no song name/lyrics/"this track"). Pick one real song title from the routed scene (internal fit). art2 type ≠ art1.
 
-SONG (mandatory — never artist-only; selection is internal)
-- You MUST name one **specific track** (exact song title) from an artist in the curator universe.
-- **Route** the pick with the EMOTIONAL SCENE MAP (scene + art-world lane + Genius/Reddit/bar-level fit). Do **not** explain that routing in user-facing text.
-- **artist.reason** must speak only to the journal — quote their words, mirror their scenes and feelings. **Never** name the song, quote its lyrics, say “this track,” or tie the paragraph back to the recommendation.
+JSON shape:
+{"primaryEmotion":"","artist":{"name":"","song":"","albumCover":null,"songYoutubeUrl":null,"songSoundcloudUrl":null,"reason":"","searchUrl":"spotify"},"art1":{"name":"","type":"","reason":"","findUrl":""},"art2":{"name":"","type":"","reason":"","findUrl":""},"searchTrails":["","",""],"searchUrls":["","",""]}
 
-Rules for analysis:
-- Pull literal words and phrases from the entry.
-- Never boil the entry down to one abstract summary word for **searchTrails** — each trail mixes concrete journal hooks with discovery intent (see OUTPUT CONTRACT).
-
-SEARCH TRAILS (critical)
-- Do **not** output trails that restate the whole entry as one emotion word ("hope", "stress").
-- Build trails from **small details**: objects, actions, order of events, sensory bits — mixed with discovery angles (art search, lyrics discovery, etc.).
-
-REASON FIELDS (journal-first)
-- **artist.reason**, **art1.reason**, **art2.reason**: only the user’s story — no song title, no “because this song…,” no Genius/Reddit citations.
-
-ART (art1 & art2)
-- **Choose** pieces using the scene map + underground coherence with your song pick.
-- **Write** art reasons like journal reflections only — texture of what they wrote, not the track’s plot.
-
-Return ONLY this JSON, nothing else:
-{
-  "primaryEmotion": string,
-  "artist": {
-    "name": string,
-    "song": string,
-    "albumCover": string | null,
-    "songYoutubeUrl": string | null,
-    "songSoundcloudUrl": string | null,
-    "reason": string,
-    "searchUrl": string
-  },
-  "art1": {
-    "name": string,
-    "type": string,
-    "reason": string,
-    "findUrl": string
-  },
-  "art2": {
-    "name": string,
-    "type": string,
-    "reason": string,
-    "findUrl": string
-  },
-  "searchTrails": [string, string, string],
-  "searchUrls": [string, string, string]
-}
-
-Set artist.searchUrl to the literal string "spotify" (the client replaces it). Set songSoundcloudUrl to null (client builds SoundCloud search). Output songYoutubeUrl as https://www.youtube.com/watch?v=... when you know the official video; else null (client falls back to YouTube search). Output searchUrls as three Google search URLs aligned with searchTrails.
-albumCover: prefer a real https://www.youtube.com/watch?v=... URL for the official music video when known; else null.
-
-Journal entry:
+Journal:
 ---
 ${entryText}
 ---`;
@@ -722,7 +709,7 @@ ${entryText}
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.88,
-                max_tokens: 6144
+                max_tokens: 4096
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (!parsed || typeof parsed !== 'object') throw new Error('Invalid model response.');
@@ -749,23 +736,22 @@ ${entryText}
                     : kind === 'art1'
                       ? 'art1 (must stay a different category than art2 after replacement)'
                       : 'art2 (must stay a different category than art1 after replacement)';
-            const currentJson = JSON.stringify(vibeState.rec);
-            const userPrompt = `CLOSE READING / micro-detail rules apply as in the main vibe task. Give a completely different ${slotLabel} recommendation. Do not repeat this title/name: "${avoidName}".
-If replacing artist: you MUST output another **specific song title** (not artist-only); route with the EMOTIONAL SCENE MAP internally — **reason** stays journal-only (no song callback).
+            const currentJson = compactVibeRecForPrompt(vibeState.rec);
+            const userPrompt = `Different ${slotLabel}; do not repeat "${avoidName}". Artist swap = new song title; reasons journal-only.
 
-Journal entry: ${entryText}
+Journal: ${entryText}
 Emotion: ${emotion}
-Vibe answers: ${vibeAnswersText}
+Vibe: ${vibeAnswersText}
 
-CURRENT full JSON (replace ONLY the "${kind}" branch; keep every other key identical including nested objects):
+CURRENT (replace only "${kind}"; echo rest unchanged):
 ${currentJson}
 
-Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrails, searchUrls (same shapes as CURRENT full object).`;
+Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`;
 
             const fullPrompt = buildVibeFullPrompt(userPrompt);
             const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.95,
-                max_tokens: 6144
+                max_tokens: 4096
             });
             const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (parsed && typeof parsed === 'object') {
