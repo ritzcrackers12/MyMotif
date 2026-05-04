@@ -939,15 +939,12 @@ Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrai
             if (ta && prev) ta.value = prev.slice(0, 500);
         }
 
-        const journalFrameUiBound = new WeakSet();
-
         function bindJournalFrame(frameEl) {
             ensureJournalUiOnFrame(frameEl);
-            if (journalFrameUiBound.has(frameEl)) return;
             const ta = frameEl.querySelector('.journal-entry-textarea');
             const cnt = frameEl.querySelector('.journal-char-count');
-            const btn = frameEl.querySelector('.find-vibe-btn');
-            if (!ta || !cnt || !btn) return;
+            if (!ta || !cnt) return;
+            if (ta.dataset.journalInputBound === '1') return;
             const syncCount = () => {
                 const n = ta.value.length;
                 cnt.textContent = n + ' / 500';
@@ -958,13 +955,23 @@ Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrai
                 scheduleCloudSave();
             });
             syncCount();
-            btn.addEventListener('click', (ev) => {
-                ev.preventDefault();
-                ev.stopPropagation();
-                void startFindMyVibe(frameEl);
-            });
-            journalFrameUiBound.add(frameEl);
+            ta.dataset.journalInputBound = '1';
         }
+
+        /** Delegation: survives ensureJournalUiOnFrame() replacing the button DOM (WeakSet skip left stale handlers). */
+        boardContainer.addEventListener(
+            'click',
+            (e) => {
+                const btn = e.target.closest('.find-vibe-btn');
+                if (!btn || !canvas.contains(btn)) return;
+                const frameEl = btn.closest('.motif-frame');
+                if (!frameEl) return;
+                e.preventDefault();
+                e.stopPropagation();
+                void startFindMyVibe(frameEl);
+            },
+            true
+        );
 
         function wireAllJournalFrames() {
             canvas.querySelectorAll('.motif-frame').forEach(bindJournalFrame);
