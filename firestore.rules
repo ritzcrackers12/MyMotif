@@ -11,7 +11,7 @@ service cloud.firestore {
     }
 
     /**
-     * MyMotif workspace: canvas HTML, profile fields, timestamps.
+     * slimemytaste workspace: canvas HTML, profile fields, timestamps.
      * Path: users/{uid}/boards/{boardId}  (app uses boardId "default")
      */
     match /users/{userId}/boards/{boardId} {

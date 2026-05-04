@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Motif — Cultural journal</title>
-    <link rel="stylesheet" href="style.css?v=3.0.2">
+    <title>slimemytaste — Cultural journal</title>
+    <link rel="stylesheet" href="style.css?v=3.0.3">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -16,7 +16,7 @@
             <div class="blob blob-2"></div>
         </div>
         <div class="landing-content">
-            <h1 class="landing-title">My Motif</h1>
+            <h1 class="landing-title">slimemytaste</h1>
             <p class="landing-subtitle">A spatial journal for cultural discovery. Write what you feel — get curated music, art, and a path to go deeper.</p>
             <div style="display:flex; flex-direction:column; gap:16px;">
                 <button type="button" class="primary-btn" id="signup-google-btn"><i class="fa-brands fa-google"></i> Sign Up with Google</button>
@@ -26,7 +26,7 @@
     </div>
 
     <header class="top-toolbar white-panel">
-        <div class="logo">My Motif</div>
+        <div class="logo">slimemytaste</div>
         <div class="divider-vertical"></div>
         <div class="tools">
             <button type="button" class="tool-btn active" data-tool="select" title="Select Tool (V)"><i class="fa-solid fa-arrow-pointer"></i></button>
@@ -55,7 +55,7 @@
     <div id="groq-key-overlay" class="groq-key-overlay hidden" aria-hidden="true">
         <div class="groq-key-panel white-panel">
             <h2 class="groq-key-title">Connect APIs</h2>
-            <p class="groq-key-desc">Paste your <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API key</a> so &ldquo;Find your vibe&rdquo; can run. Optional: <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify Web API</a> Client ID + Client Secret for direct Spotify track links; if omitted, the app uses Apple iTunes search (real songs) and opens Spotify search for that track. Nothing is sent to our servers or GitHub — storage is in this browser only.</p>
+            <p class="groq-key-desc">Paste your <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API key</a> so slimemytaste can run (&ldquo;you need to see ts&rdquo; on a journal). Optional: <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify Web API</a> Client ID + Client Secret for direct Spotify track links; if omitted, the app uses Apple iTunes search (real songs) and opens Spotify search for that track. Nothing is sent to our servers or GitHub — storage is in this browser only.</p>
             <label class="groq-key-label" for="groq-key-input">Groq API key</label>
             <input type="password" id="groq-key-input" class="groq-key-input" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
             <label class="groq-key-label" for="spotify-client-id-input" style="margin-top:12px">Spotify Client ID (optional)</label>
@@ -70,6 +70,6 @@
         </div>
     </div>
 
-    <script type="module" src="script.js?v=2.4.3"></script>
+    <script type="module" src="script.js?v=2.4.4"></script>
 </body>
 </html>

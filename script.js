@@ -66,7 +66,7 @@ function normalizeNameLoose(s) {
 function resolveCuratorArtistPick(raw) {
     const t = String(raw || '').trim();
     if (!t) {
-        console.warn('MyMotif: missing curatorArtistPick → Summrs');
+        console.warn('slimemytaste: missing curatorArtistPick → Summrs');
         return 'Summrs';
     }
     const exact = CURATOR_ARTISTS.find((a) => a === t);
@@ -85,7 +85,7 @@ function resolveCuratorArtistPick(raw) {
             a.toLowerCase().includes(tl)
     );
     if (partial) return partial;
-    console.warn('MyMotif: curatorArtistPick not in list:', raw, '→ Summrs');
+    console.warn('slimemytaste: curatorArtistPick not in list:', raw, '→ Summrs');
     return 'Summrs';
 }
 
@@ -394,7 +394,7 @@ async function resolveTrackFromSearchQuery(spotifySearchQuery) {
             const track = await spotifyApiSearchFirstTrack(q);
             return { track, usedQuery: q, source: 'spotify' };
         } catch (e) {
-            console.warn('MyMotif: Spotify resolution failed, using iTunes:', e && e.message);
+            console.warn('slimemytaste: Spotify resolution failed, using iTunes:', e && e.message);
         }
     }
     const track = await itunesSearchFirstTrack(q);
@@ -417,7 +417,7 @@ async function resolveTrackForCurator(rawCuratorPick, moodKeywords) {
                 return { ...r, usedQuery: q, curatorArtist: canon };
             }
         } catch (e) {
-            console.warn('MyMotif: curator track attempt failed:', q, e && e.message);
+            console.warn('slimemytaste: curator track attempt failed:', q, e && e.message);
         }
     }
     const fallback = await resolveTrackFromSearchQuery(attempts[0]);
@@ -552,10 +552,10 @@ async function ensureAuthPersistence() {
     for (const [name, persistence] of tiers) {
         try {
             await setPersistence(auth, persistence);
-            console.log('MyMotif: auth persistence →', name);
+            console.log('slimemytaste: auth persistence →', name);
             return;
         } catch (e) {
-            console.warn('MyMotif: persistence failed (' + name + '):', e && (e.code || e.message));
+            console.warn('slimemytaste: persistence failed (' + name + '):', e && (e.code || e.message));
         }
     }
 }
@@ -611,7 +611,7 @@ function parseVibeJsonFromResponse(data) {
 
 const initApp = async () => {
     try {
-        console.log('My Motif: Starting journal build…');
+        console.log('slimemytaste: Starting journal build…');
         const boardContainer = document.getElementById('board-container');
         const canvas = document.getElementById('canvas');
         const landingPage = document.getElementById('landing-page');
@@ -630,7 +630,7 @@ const initApp = async () => {
         } catch (err) {
             const c = err && err.code;
             if (c && c !== 'auth/popup-closed-by-user' && c !== 'auth/cancelled-popup-request') {
-                console.warn('[MyMotif] getRedirectResult:', c, err.message || err);
+                console.warn('[slimemytaste] getRedirectResult:', c, err.message || err);
             }
         }
         if (typeof auth.authStateReady === 'function') {
@@ -772,7 +772,7 @@ const initApp = async () => {
                     if (ta && typeof d.data().entry === 'string') ta.value = d.data().entry;
                 });
             } catch (e) {
-                console.warn('MyMotif: could not load frame entries:', e && (e.code || e.message));
+                console.warn('slimemytaste: could not load frame entries:', e && (e.code || e.message));
             }
         }
 
@@ -1014,13 +1014,13 @@ const initApp = async () => {
         vibeOverlay.className = 'vibe-panel-overlay hidden';
         vibeOverlay.innerHTML = `
             <div class="vibe-panel-backdrop" data-vibe-close="1"></div>
-            <aside class="vibe-panel-drawer" role="dialog" aria-modal="true" aria-label="Vibe finder">
+            <aside class="vibe-panel-drawer" role="dialog" aria-modal="true" aria-label="slimemytaste">
                 <div class="vibe-panel-header">
-                    <h2 class="vibe-panel-title">Find your vibe</h2>
+                    <h2 class="vibe-panel-title">turning you slime right now twin</h2>
                     <button type="button" class="vibe-panel-close icon-btn" title="Close" data-vibe-close="1"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="vibe-panel-body" id="vibe-panel-stage"></div>
-                <p class="vibe-panel-footer-note">Art lives everywhere. These are starting points.</p>
+                <p class="vibe-panel-footer-note">Sorry Twin, You Slime Now.</p>
             </aside>`;
         document.body.appendChild(vibeOverlay);
 
@@ -1116,7 +1116,7 @@ const initApp = async () => {
                 const moods = [...byMood.keys()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
                 if (moods.length === 0) {
                     body.innerHTML =
-                        '<p class="favorites-empty">No favorites yet. Run &ldquo;Find your vibe&rdquo; and tap the heart on a suggestion.</p>';
+                        '<p class="favorites-empty">No favorites yet. Use &ldquo;you need to see ts&rdquo; on a journal, then tap the heart on a suggestion.</p>';
                     return;
                 }
                 let html =
@@ -1615,6 +1615,12 @@ Avoid repeating: "${avoidName}"`;
             });
         }
 
+        function formatVibeLoadingCountdown(totalSeconds) {
+            const m = Math.floor(totalSeconds / 60);
+            const s = totalSeconds % 60;
+            return `${m}:${String(s).padStart(2, '0')}`;
+        }
+
         async function startFindMyVibe(frameEl) {
             const ta = frameEl.querySelector('.journal-entry-textarea');
             const entry = (ta && ta.value.trim()) || '';
@@ -1623,7 +1629,7 @@ Avoid repeating: "${avoidName}"`;
                 return;
             }
             if (!auth.currentUser) {
-                console.warn('MyMotif: not signed in — vibe still runs; sign in to sync to Firestore.');
+                console.warn('slimemytaste: not signed in — run still works; sign in to sync to Firestore.');
             }
             vibeState.frame = frameEl;
             vibeState.entry = entry.slice(0, 500);
@@ -1633,9 +1639,29 @@ Avoid repeating: "${avoidName}"`;
             vibeState.historyArt1 = [];
             vibeState.historyArt2 = [];
             openVibePanel();
-            setVibeStage(
-                '<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Matching your vibe to music & art…</p></div>'
-            );
+            const slimeServersMsg =
+                'SlimeServers are still connecting... wait 1 more second for me 5';
+            let secondsLeft = 60;
+            setVibeStage(`<div class="vibe-loading" id="vibe-loading-root">
+                <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+                <p class="vibe-loading-countdown" id="vibe-countdown-display">${formatVibeLoadingCountdown(secondsLeft)}</p>
+                <p class="vibe-loading-status" id="vibe-loading-status" aria-live="polite"></p>
+            </div>`);
+            let countdownIntervalId = null;
+            const tick = () => {
+                const cd = document.getElementById('vibe-countdown-display');
+                const st = document.getElementById('vibe-loading-status');
+                if (!cd) return;
+                secondsLeft -= 1;
+                if (secondsLeft > 0) {
+                    cd.textContent = formatVibeLoadingCountdown(secondsLeft);
+                    if (st) st.textContent = '';
+                } else {
+                    cd.textContent = '0:00';
+                    if (st) st.textContent = slimeServersMsg;
+                }
+            };
+            countdownIntervalId = setInterval(tick, 1000);
             try {
                 const full = await runVibeJournalToRecommendations(vibeState.entry);
                 vibeState.primaryEmotion = full.primaryEmotion || '';
@@ -1671,6 +1697,8 @@ Avoid repeating: "${avoidName}"`;
                     `<div class="vibe-error-panel"><p>${escapeHtml(e.message || String(e))}</p><button type="button" class="primary-btn" id="vibe-retry">Try again</button></div>`
                 );
                 document.getElementById('vibe-retry').addEventListener('click', () => startFindMyVibe(frameEl));
+            } finally {
+                if (countdownIntervalId) clearInterval(countdownIntervalId);
             }
         }
 
@@ -2081,7 +2109,7 @@ Avoid repeating: "${avoidName}"`;
 
         wireAllJournalFrames();
 
-        console.log('My Motif: journal app ready.');
+        console.log('slimemytaste: journal app ready.');
     } catch (e) {
         alert('Fatal error during app boot: ' + (e.message || String(e)));
     }

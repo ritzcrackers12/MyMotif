@@ -1397,9 +1397,12 @@ a.secondary-btn:hover {
 }
 .vibe-panel-title {
     font-family: 'Bebas Neue', cursive;
-    font-size: 22px;
-    letter-spacing: 0.1em;
+    font-size: 18px;
+    letter-spacing: 0.06em;
+    line-height: 1.2;
     margin: 0;
+    padding-right: 8px;
+    max-width: calc(100% - 48px);
     color: var(--neon);
 }
 .vibe-panel-body {
@@ -1645,6 +1648,28 @@ a.secondary-btn:hover {
     padding: 32px 12px;
     font-family: 'Space Grotesk', sans-serif;
     color: rgba(255, 255, 255, 0.75);
+}
+.vibe-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+.vibe-loading-countdown {
+    font-size: 1.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    margin: 0;
+    color: rgba(255, 255, 255, 0.95);
+}
+.vibe-loading-status {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    max-width: 280px;
+    min-height: 2.8em;
+    color: rgba(255, 255, 255, 0.8);
 }
 .vibe-emotion-label {
     font-family: 'Space Grotesk', sans-serif;

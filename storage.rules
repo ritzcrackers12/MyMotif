@@ -1,5 +1,5 @@
 rules_version = '2';
-// MyMotif uses Firestore only; canvas is HTML in Firestore, not Storage.
+// slimemytaste uses Firestore only; canvas is HTML in Firestore, not Storage.
 service firebase.storage {
   match /b/{bucket}/o {
     match /{allPaths=**} {
