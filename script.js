@@ -455,6 +455,14 @@ const initApp = async () => {
             vibeStage.innerHTML = html;
         }
 
+        function buildVibeGeminiBody(userTaskText, generationConfig) {
+            const fullText = `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}`;
+            return {
+                contents: [{ parts: [{ text: fullText }] }],
+                generationConfig
+            };
+        }
+
         async function runGeminiStep1Questions(entryText) {
             const userPrompt = `Read this journal entry and identify the primary emotion. Then generate exactly 3 follow-up questions to sharpen your understanding of the emotional and aesthetic vibe. Questions should feel visceral and instinctive, not clinical — like a friend asking, not a therapist.
 Each question has exactly 3 short answer options.
@@ -469,15 +477,10 @@ Return ONLY this JSON, nothing else:
 
 Journal entry: ${entryText}`;
 
-            const body = {
-                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
-                contents: [{ parts: [{ text: userPrompt }] }],
-                generationConfig: {
-                    temperature: 0.9,
-                    maxOutputTokens: 2048,
-                    responseMimeType: 'application/json'
-                }
-            };
+            const body = buildVibeGeminiBody(userPrompt, {
+                temperature: 0.9,
+                maxOutputTokens: 2048
+            });
             const data = await geminiGenerateContent(body);
             const parsed = parseGeminiJsonFromResponse(data);
             return parsed;
@@ -531,15 +534,10 @@ Journal entry: ${entryText}
 Identified emotion: ${emotion}
 Vibe answers: ${vibeAnswersText}`;
 
-            const body = {
-                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
-                contents: [{ parts: [{ text: userPrompt }] }],
-                generationConfig: {
-                    temperature: 0.85,
-                    maxOutputTokens: 3072,
-                    responseMimeType: 'application/json'
-                }
-            };
+            const body = buildVibeGeminiBody(userPrompt, {
+                temperature: 0.85,
+                maxOutputTokens: 3072
+            });
             const data = await geminiGenerateContent(body);
             return normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
         }
@@ -561,15 +559,10 @@ ${currentJson}
 
 Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as CURRENT).`;
 
-            const body = {
-                systemInstruction: { parts: [{ text: buildCuratorSystemPrompt() }] },
-                contents: [{ parts: [{ text: userPrompt }] }],
-                generationConfig: {
-                    temperature: 0.95,
-                    maxOutputTokens: 3072,
-                    responseMimeType: 'application/json'
-                }
-            };
+            const body = buildVibeGeminiBody(userPrompt, {
+                temperature: 0.95,
+                maxOutputTokens: 3072
+            });
             const data = await geminiGenerateContent(body);
             const parsed = normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
             if (parsed && typeof parsed === 'object') {
@@ -744,15 +737,14 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
         }
 
         async function startFindMyVibe(frameEl) {
-            if (!auth.currentUser) {
-                alert('Sign in to save your journal and run vibe finder.');
-                return;
-            }
             const ta = frameEl.querySelector('.journal-entry-textarea');
             const entry = (ta && ta.value.trim()) || '';
             if (!entry) {
                 alert('Write something in your journal first.');
                 return;
+            }
+            if (!auth.currentUser) {
+                console.warn('MyMotif: not signed in — vibe still runs; sign in to sync to Firestore.');
             }
             vibeState.frame = frameEl;
             vibeState.entry = entry.slice(0, 500);
@@ -792,7 +784,11 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 scheduleCloudSave();
             });
             syncCount();
-            btn.addEventListener('click', () => void startFindMyVibe(frameEl));
+            btn.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                void startFindMyVibe(frameEl);
+            });
         }
 
         function wireAllJournalFrames() {
@@ -933,6 +929,25 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 return;
             }
 
+            const deleteBtnEarly = e.target.closest('.delete-btn');
+            if (deleteBtnEarly) {
+                const parentEl = deleteBtnEarly.closest('.motif-frame, .motif-board');
+                if (parentEl) {
+                    saveStateSafe();
+                    parentEl.remove();
+                }
+                return;
+            }
+
+            if (
+                e.target.closest('.find-vibe-btn') ||
+                e.target.closest('.journal-entry-textarea') ||
+                e.target.closest('.frame-header input') ||
+                e.target.closest('.board-header input')
+            ) {
+                return;
+            }
+
             if (currentTool === 'frame' || currentTool === 'board') {
                 isDrawing = true;
                 dragStartX = pointerX;
@@ -951,16 +966,6 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                     ghost.style.background = 'rgba(107, 92, 231, 0.1)';
                 }
                 deselectAll();
-                return;
-            }
-
-            const deleteBtn = e.target.closest('.delete-btn');
-            if (deleteBtn) {
-                const parentEl = deleteBtn.closest('.motif-frame, .motif-board');
-                if (parentEl) {
-                    saveStateSafe();
-                    parentEl.remove();
-                }
                 return;
             }
 
@@ -1175,7 +1180,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 <textarea class="journal-entry-textarea" maxlength="500" rows="6" placeholder="What's on your mind?"></textarea>
                 <div class="journal-toolbar">
                     <span class="journal-char-count">0 / 500</span>
-                    <button type="button" class="primary-btn find-vibe-btn">Find My Vibe</button>
+                    <button type="button" class="primary-btn find-vibe-btn">you need to see ts</button>
                 </div>
             </div>
             <div class="frame-resize-handle"></div>
