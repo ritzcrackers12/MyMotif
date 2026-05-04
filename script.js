@@ -19,8 +19,7 @@ import {
 } from './firebase.js';
 import { buildCuratorSystemPrompt } from './curator-prompt.js';
 
-/** Default Gemini key (restrict in Google Cloud via HTTP referrers). */
-const MYMOTIF_DEFAULT_GEMINI_API_KEY = 'AIzaSyBIO_RbPR64ltwkTMlVovWXruem8wAsEe0';
+/** Set before loading `script.js`: `window.MYMOTIF_GROQ_API_KEY = 'gsk_...'` (inline `<script>` above the module tag). Do not commit real keys — GitHub blocks pushes that contain API secrets. */
 
 const WORKSPACE_BOARD_ID = 'default';
 
@@ -78,29 +77,13 @@ function restoreJournalSnapshotsAfterInnerHtml() {
     });
 }
 
-function extractGeminiText(data) {
-    const parts = data?.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-        const joined = parts
-            .filter((p) => p && typeof p.text === 'string')
-            .map((p) => p.text)
-            .join('');
-        if (joined.trim()) return joined;
-    }
-    const c0text = data?.candidates?.[0]?.content?.text;
-    if (typeof c0text === 'string' && c0text.trim()) return c0text;
-    const alt = data?.content;
-    if (Array.isArray(alt)) {
-        return alt
-            .filter((block) => block && block.type === 'text' && block.text)
-            .map((block) => block.text)
-            .join('');
-    }
-    return '';
+function extractGroqAssistantText(data) {
+    const c = data?.choices?.[0]?.message?.content;
+    return typeof c === 'string' ? c : '';
 }
 
-function parseGeminiJsonFromResponse(data) {
-    const text = extractGeminiText(data);
+function parseVibeJsonFromResponse(data) {
+    const text = extractGroqAssistantText(data);
     const clean = String(text)
         .replace(/^\uFEFF/, '')
         .replace(/```json/gi, '')
@@ -347,41 +330,42 @@ const initApp = async () => {
             });
         }
 
-        const winGeminiOverride =
+        const winGroqOverride =
             typeof window !== 'undefined' &&
-            typeof window.MYMOTIF_GEMINI_API_KEY === 'string' &&
-            window.MYMOTIF_GEMINI_API_KEY.trim();
-        const GEMINI_API_KEY = winGeminiOverride || MYMOTIF_DEFAULT_GEMINI_API_KEY;
-        /** Stable IDs for generateContent; no `flash-8b` (Vertex-only / not on AI Studio v1). */
-        const GEMINI_API_VERSION = 'v1beta';
-        const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+            typeof window.MYMOTIF_GROQ_API_KEY === 'string' &&
+            window.MYMOTIF_GROQ_API_KEY.trim();
+        const GROQ_API_KEY = winGroqOverride || '';
+        const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
+        const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile'];
 
-        const GEMINI_FETCH_TIMEOUT_MS = 75000;
+        const GROQ_FETCH_TIMEOUT_MS = 75000;
 
-        function geminiCandidateHasText(data) {
-            const parts = data?.candidates?.[0]?.content?.parts;
-            if (!Array.isArray(parts)) return false;
-            return parts.some((p) => typeof p.text === 'string' && p.text.trim().length > 0);
-        }
-
-        function geminiResponseHasUsableText(data) {
-            return geminiCandidateHasText(data) || extractGeminiText(data).trim().length > 0;
-        }
-
-        async function geminiGenerateContent(requestBody) {
+        async function groqChatCompletion(fullPromptText, { temperature, max_tokens }) {
+            if (!GROQ_API_KEY) {
+                throw new Error(
+                    'Missing Groq API key. Add an inline script above the module script: window.MYMOTIF_GROQ_API_KEY = "your_key";'
+                );
+            }
             let lastMessage = '';
             const maxAttempts = 4;
-            for (const model of GEMINI_MODELS) {
-                const url = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+            for (const model of GROQ_MODELS) {
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
                     const controller = new AbortController();
-                    const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+                    const timer = setTimeout(() => controller.abort(), GROQ_FETCH_TIMEOUT_MS);
                     let response;
                     try {
-                        response = await fetch(url, {
+                        response = await fetch(GROQ_CHAT_URL, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(requestBody),
+                            headers: {
+                                'Content-Type': 'application/json',
+                                Authorization: `Bearer ${GROQ_API_KEY}`
+                            },
+                            body: JSON.stringify({
+                                model,
+                                messages: [{ role: 'user', content: fullPromptText }],
+                                temperature,
+                                max_tokens
+                            }),
                             signal: controller.signal
                         });
                     } catch (e) {
@@ -391,28 +375,19 @@ const initApp = async () => {
                     }
                     clearTimeout(timer);
                     const data = await response.json().catch(() => ({}));
-                    if (data.promptFeedback?.blockReason) {
-                        lastMessage = `Prompt blocked: ${data.promptFeedback.blockReason}`;
-                        break;
-                    }
-                    const c0 = data.candidates?.[0];
-                    const notFound =
+                    const errBody = data.error?.message || '';
+                    const modelBad =
                         response.status === 404 ||
-                        data.error?.status === 'NOT_FOUND' ||
-                        /not found|not supported for generateContent/i.test(data.error?.message || '');
-                    if (notFound) {
-                        lastMessage = data.error?.message || `HTTP ${response.status} (${model})`;
+                        /model.*not found|does not exist|invalid model|unknown model/i.test(errBody);
+                    if (modelBad) {
+                        lastMessage = errBody || `HTTP ${response.status} (${model})`;
                         break;
                     }
-                    if (response.ok && c0 && geminiResponseHasUsableText(data)) return data;
-                    lastMessage =
-                        data.error?.message ||
-                        (c0?.finishReason ? `Model stopped: ${c0.finishReason}` : '') ||
-                        `HTTP ${response.status}`;
+                    if (response.ok && extractGroqAssistantText(data).trim()) return data;
+                    lastMessage = errBody || `HTTP ${response.status}`;
                     const is429 =
                         response.status === 429 ||
-                        data.error?.status === 'RESOURCE_EXHAUSTED' ||
-                        /quota|exceeded|Resource exhausted/i.test(lastMessage);
+                        /rate limit|too many requests|quota/i.test(lastMessage);
                     if (is429 && attempt < maxAttempts - 1) {
                         await new Promise((r) => setTimeout(r, 12000));
                         continue;
@@ -420,7 +395,7 @@ const initApp = async () => {
                     break;
                 }
             }
-            throw new Error(lastMessage || 'Gemini request failed.');
+            throw new Error(lastMessage || 'Groq request failed.');
         }
 
         function escapeHtml(s) {
@@ -477,15 +452,12 @@ const initApp = async () => {
             vibeStage.innerHTML = html;
         }
 
-        function buildVibeGeminiBody(userTaskText, generationConfig) {
-            const fullText = `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}`;
-            return {
-                contents: [{ parts: [{ text: fullText }] }],
-                generationConfig
-            };
+        /** Same shape as before: curator system prompt + USER TASK + model instructions (unchanged). */
+        function buildVibeFullPrompt(userTaskText) {
+            return `${buildCuratorSystemPrompt()}\n\n=== USER TASK ===\n\n${userTaskText}`;
         }
 
-        async function runGeminiJournalToRecommendations(entryText) {
+        async function runVibeJournalToRecommendations(entryText) {
             const userPrompt = `Read this journal entry. Infer the primary emotional register, then recommend exactly ONE artist/song, ONE specific art work (any medium), and ONE search query to go deeper — all matching that vibe. Use the emotional scene map from your instructions.
 
 Return ONLY this JSON, nothing else:
@@ -515,12 +487,12 @@ For searchQuery url: https://www.google.com/search?q=[encoded query]
 
 Journal entry: ${entryText}`;
 
-            const body = buildVibeGeminiBody(userPrompt, {
+            const fullPrompt = buildVibeFullPrompt(userPrompt);
+            const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.88,
-                maxOutputTokens: 4096
+                max_tokens: 4096
             });
-            const data = await geminiGenerateContent(body);
-            const parsed = normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+            const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (!parsed || typeof parsed !== 'object') throw new Error('Invalid model response.');
             if (!parsed.artist?.name || !parsed.art?.name) {
                 throw new Error('Model response missing artist or art. Try again.');
@@ -539,7 +511,7 @@ Journal entry: ${entryText}`;
             return rec;
         }
 
-        async function runGeminiReshuffle(kind, avoidName) {
+        async function runVibeReshuffle(kind, avoidName) {
             const entryText = vibeState.entry;
             const emotion = vibeState.primaryEmotion;
             const vibeAnswersText =
@@ -559,12 +531,12 @@ ${currentJson}
 
 Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as CURRENT).`;
 
-            const body = buildVibeGeminiBody(userPrompt, {
+            const fullPrompt = buildVibeFullPrompt(userPrompt);
+            const data = await groqChatCompletion(fullPrompt, {
                 temperature: 0.95,
-                maxOutputTokens: 3072
+                max_tokens: 3072
             });
-            const data = await geminiGenerateContent(body);
-            const parsed = normalizeRecommendationUrls(parseGeminiJsonFromResponse(data));
+            const parsed = normalizeRecommendationUrls(parseVibeJsonFromResponse(data));
             if (parsed && typeof parsed === 'object') {
                 vibeState.rec = {
                     artist: parsed.artist || vibeState.rec.artist,
@@ -645,7 +617,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                     const errEl = document.getElementById('vibe-step2-err');
                     if (errEl) errEl.classList.add('hidden');
                     try {
-                        await runGeminiReshuffle(kind, prevName);
+                        await runVibeReshuffle(kind, prevName);
                         const nextName =
                             kind === 'artist'
                                 ? String(vibeState.rec?.artist?.name || '')
@@ -697,7 +669,7 @@ Return ONLY valid JSON with keys "artist", "art", "searchQuery" (same shape as C
                 '<div class="vibe-loading"><i class="fa-solid fa-spinner fa-spin"></i><p>Matching your vibe to music & art…</p></div>'
             );
             try {
-                const full = await runGeminiJournalToRecommendations(vibeState.entry);
+                const full = await runVibeJournalToRecommendations(vibeState.entry);
                 vibeState.primaryEmotion = full.primaryEmotion || '';
                 vibeState.rec = {
                     artist: full.artist,

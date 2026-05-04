@@ -1,4 +1,4 @@
-/** Curator seed list — injected into every Gemini system prompt. */
+/** Curator seed list — injected into every vibe LLM system prompt. */
 export const CURATOR_ARTISTS = [
     "Pz'",
     'Tezzus',
@@ -56,7 +56,7 @@ export const CURATOR_ARTISTS = [
     'Summrs'
 ];
 
-/** Exact curator system prompt for every Gemini call (product spec). */
+/** Exact curator system prompt for every vibe call (product spec). */
 export function buildCuratorSystemPrompt() {
     const artistLine = CURATOR_ARTISTS.join(', ');
     return `You are a personal cultural curator with deep knowledge of underground rap scenes, their emotional DNA, and the art worlds that surround them.
