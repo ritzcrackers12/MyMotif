@@ -1421,6 +1421,25 @@ h1, h2, h3, h4, h5, h6 {
 .vibe-open-btn {
     width: 100%;
 }
+.vibe-stream-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+}
+.vibe-stream-links .vibe-stream-btn {
+    flex: 1 1 calc(33.333% - 8px);
+    min-width: 0;
+    width: auto;
+    text-align: center;
+    text-decoration: none;
+    box-sizing: border-box;
+    font-size: 13px;
+    padding: 10px 8px;
+}
+.vibe-stream-links .vibe-stream-btn i {
+    margin-right: 6px;
+}
 .vibe-rec-card--artist .vibe-card-kicker {
     margin-bottom: 8px;
 }

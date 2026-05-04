@@ -25,6 +25,23 @@ function parseYoutubeVideoIdForArtist(url) {
     return m ? m[1] : null;
 }
 
+/** Prefer model watch/results URL; else YouTube search for artist + song. */
+function resolveYoutubeSongUrl(url, fallbackQuery) {
+    if (url && typeof url === 'string') {
+        const t = url.trim();
+        if (/^https?:\/\//i.test(t)) {
+            try {
+                const u = new URL(t);
+                const h = u.hostname.replace(/^www\./, '');
+                if (h === 'youtube.com' || h === 'youtu.be' || h === 'm.youtube.com') return t;
+            } catch {
+                /* fall through */
+            }
+        }
+    }
+    return `https://www.youtube.com/results?search_query=${encodeURIComponent(fallbackQuery)}`;
+}
+
 function urlPassesArtFindPolicy(url) {
     if (!url || typeof url !== 'string') return false;
     try {
@@ -76,6 +93,13 @@ function normalizeRecommendationUrls(rec) {
     const spotifyQ = [song, name].filter(Boolean).join(' ').trim() || name || 'music';
     if (rec.artist && typeof rec.artist === 'object') {
         rec.artist.searchUrl = `https://open.spotify.com/search/${encodeURIComponent(spotifyQ)}`;
+        const ytCandidate =
+            rec.artist.songYoutubeUrl ||
+            (/youtube\.com\/watch|youtu\.be\//i.test(String(rec.artist.albumCover || ''))
+                ? rec.artist.albumCover
+                : null);
+        rec.artist.songYoutubeUrl = resolveYoutubeSongUrl(ytCandidate, spotifyQ);
+        rec.artist.songSoundcloudUrl = `https://soundcloud.com/search/sounds?q=${encodeURIComponent(spotifyQ)}`;
     }
     coerceArtFindUrl(rec.art1);
     coerceArtFindUrl(rec.art2);
@@ -634,27 +658,27 @@ const initApp = async () => {
 
         async function runVibeJournalToRecommendations(entryText) {
             const userPrompt = `You are doing CLOSE READING of this journal entry, not summarizing it.
-Your job is to find SPECIFIC DETAILS and match them to SPECIFIC moments in art and music — not general vibes.
+Your job is to find SPECIFIC DETAILS in **their** writing — not general vibes.
 
-SONG (mandatory — never artist-only)
-- You MUST name one **specific track** (exact song title) from an artist in the curator universe. Do not recommend only an artist name.
-- Choose the song whose **story arc or lyrics** overlap the journal: e.g. if they wrote about a date, prefer a track where the rapper tells a date story or parallel narrative; quote or paraphrase how the song’s plot matches theirs.
-- Before you lock the pick, use **forum-grade context**: Genius (lyrics + annotations/song bio) and Reddit/fan discussions are your conceptual references for what the track is *about* — weave that into your reason (you can mention Genius or Reddit as sources where people unpack the narrative).
+SONG (mandatory — never artist-only; selection is internal)
+- You MUST name one **specific track** (exact song title) from an artist in the curator universe.
+- **Route** the pick with the EMOTIONAL SCENE MAP (scene + art-world lane + Genius/Reddit/bar-level fit). Do **not** explain that routing in user-facing text.
+- **artist.reason** must speak only to the journal — quote their words, mirror their scenes and feelings. **Never** name the song, quote its lyrics, say “this track,” or tie the paragraph back to the recommendation.
 
 Rules for analysis:
-- Pull out literal words and phrases from the entry (shower, date, excited, etc.).
-- Find that specific song where bar-level meaning aligns; say which lyric or verse theme matches a journal beat.
-- Never boil the entry down to one abstract summary word for **searchTrails** — each of the three trails must combine concrete journal hooks with discovery intent (see OUTPUT CONTRACT).
+- Pull literal words and phrases from the entry.
+- Never boil the entry down to one abstract summary word for **searchTrails** — each trail mixes concrete journal hooks with discovery intent (see OUTPUT CONTRACT).
 
 SEARCH TRAILS (critical)
 - Do **not** output trails that restate the whole entry as one emotion word ("hope", "stress").
-- Build trails from **small details**: objects, actions, order of events, sensory bits — mixed with artist/song or art angles. Example entry: "woke up, shower, date I was excited about" → one trail might blend shower + visual art discovery; another blends date + your chosen artist/song + genius lyrics; another might use "excited" **plus** a concrete phrase from the entry, never alone.
+- Build trails from **small details**: objects, actions, order of events, sensory bits — mixed with discovery angles (art search, lyrics discovery, etc.).
 
-The reason fields should quote SPECIFIC words or phrases from the journal entry, then connect them to the recommended **song’s** story (with Genius/Reddit-quality specificity).
+REASON FIELDS (journal-first)
+- **artist.reason**, **art1.reason**, **art2.reason**: only the user’s story — no song title, no “because this song…,” no Genius/Reddit citations.
 
-ART (art1 & art2) — hard requirements for every response
-- Art must still fit the **general underground rap / curator-list vibe** of the music pick (not unrelated aesthetic worlds).
-- In each art **reason**, make explicit: (1) the **story** the suggested song tells + the story the user told — do they align? (2) **why** that pairing works (not generic “it fits the mood”). (3) what the track **sounds** like (sonic texture in plain language). (4) how that **translates visually** into this specific work / search. (5) does the visual match **their** narrative — yes/no and how.
+ART (art1 & art2)
+- **Choose** pieces using the scene map + underground coherence with your song pick.
+- **Write** art reasons like journal reflections only — texture of what they wrote, not the track’s plot.
 
 Return ONLY this JSON, nothing else:
 {
@@ -663,6 +687,8 @@ Return ONLY this JSON, nothing else:
     "name": string,
     "song": string,
     "albumCover": string | null,
+    "songYoutubeUrl": string | null,
+    "songSoundcloudUrl": string | null,
     "reason": string,
     "searchUrl": string
   },
@@ -682,7 +708,7 @@ Return ONLY this JSON, nothing else:
   "searchUrls": [string, string, string]
 }
 
-Set artist.searchUrl to the literal string "spotify" (the client replaces it). Output searchUrls as three Google search URLs aligned with searchTrails.
+Set artist.searchUrl to the literal string "spotify" (the client replaces it). Set songSoundcloudUrl to null (client builds SoundCloud search). Output songYoutubeUrl as https://www.youtube.com/watch?v=... when you know the official video; else null (client falls back to YouTube search). Output searchUrls as three Google search URLs aligned with searchTrails.
 albumCover: prefer a real https://www.youtube.com/watch?v=... URL for the official music video when known; else null.
 
 Journal entry:
@@ -716,13 +742,13 @@ ${entryText}
                     : '(Infer from journal and emotion only.)';
             const slotLabel =
                 kind === 'artist'
-                    ? 'artist (name, song, albumCover, reason, searchUrl)'
+                    ? 'artist (name, song, albumCover, songYoutubeUrl, songSoundcloudUrl, reason, searchUrl)'
                     : kind === 'art1'
                       ? 'art1 (must stay a different category than art2 after replacement)'
                       : 'art2 (must stay a different category than art1 after replacement)';
             const currentJson = JSON.stringify(vibeState.rec);
             const userPrompt = `CLOSE READING / micro-detail rules apply as in the main vibe task. Give a completely different ${slotLabel} recommendation. Do not repeat this title/name: "${avoidName}".
-If replacing artist: you MUST output another **specific song title** (not artist-only); use Genius/Reddit-level understanding of the track’s story vs. the journal.
+If replacing artist: you MUST output another **specific song title** (not artist-only); route with the EMOTIONAL SCENE MAP internally — **reason** stays journal-only (no song callback).
 
 Journal entry: ${entryText}
 Emotion: ${emotion}
@@ -759,7 +785,8 @@ Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrai
         function buildArtistHeroHtml(a) {
             const albumCover = a.albumCover || '';
             const artistName = a.name || '';
-            const vid = parseYoutubeVideoIdForArtist(albumCover);
+            const vid =
+                parseYoutubeVideoIdForArtist(albumCover) || parseYoutubeVideoIdForArtist(a.songYoutubeUrl || '');
             if (vid) {
                 return `<div class="vibe-artist-hero"><iframe class="vibe-artist-iframe" src="https://www.youtube.com/embed/${vid}" title="Music video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>`;
             }
@@ -801,7 +828,11 @@ Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrai
                             <p class="vibe-artist-songline">${songLine}</p>
                             <p class="vibe-artist-nameline">${nameMuted}</p>
                             <p class="vibe-card-body vibe-card-body--friend">${escapeHtml(a.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="play">Play it</button>
+                            <div class="vibe-stream-links" role="group" aria-label="Listen">
+                                <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.songYoutubeUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-youtube" aria-hidden="true"></i> YouTube</a>
+                                <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.searchUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-spotify" aria-hidden="true"></i> Spotify</a>
+                                <a class="secondary-btn vibe-stream-btn" href="${escapeHtml(a.songSoundcloudUrl || '')}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-soundcloud" aria-hidden="true"></i> SoundCloud</a>
+                            </div>
                         </div>
                     </div>
                     <div class="vibe-rec-card" data-card="art1">
@@ -829,13 +860,9 @@ Return ONLY valid JSON with keys: primaryEmotion, artist, art1, art2, searchTrai
                 </div>
                 <p class="vibe-error hidden" id="vibe-step2-err"></p>`);
 
-            const playUrl = (vibeState.rec && vibeState.rec.artist && vibeState.rec.artist.searchUrl) || '';
             const art1Url = art1.findUrl || '';
             const art2Url = art2.findUrl || '';
 
-            vibeStage.querySelector('[data-vibe-link="play"]')?.addEventListener('click', () => {
-                if (playUrl) window.open(playUrl, '_blank', 'noopener,noreferrer');
-            });
             vibeStage.querySelector('[data-vibe-link="art1"]')?.addEventListener('click', () => {
                 if (art1Url) window.open(art1Url, '_blank', 'noopener,noreferrer');
             });
