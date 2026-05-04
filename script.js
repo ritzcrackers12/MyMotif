@@ -22,12 +22,6 @@ import {
 } from './firebase.js';
 import { buildCuratorSystemPrompt, buildVibeGroqOutputContract } from './curator-prompt.js';
 
-function parseYoutubeVideoIdForArtist(url) {
-    if (!url || typeof url !== 'string') return null;
-    const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-    return m ? m[1] : null;
-}
-
 /** Prefer model watch/results URL; else YouTube search for artist + song. */
 function resolveYoutubeSongUrl(url, fallbackQuery) {
     if (url && typeof url === 'string') {
@@ -937,23 +931,6 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             return '<div class="vibe-card-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>';
         }
 
-        function buildArtistHeroHtml(a) {
-            const albumCover = a.albumCover || '';
-            const artistName = a.name || '';
-            const vid =
-                parseYoutubeVideoIdForArtist(albumCover) || parseYoutubeVideoIdForArtist(a.songYoutubeUrl || '');
-            if (vid) {
-                return `<div class="vibe-artist-hero"><iframe class="vibe-artist-iframe" src="https://www.youtube.com/embed/${vid}" title="Music video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>`;
-            }
-            if (albumCover && /^https?:\/\//i.test(albumCover)) {
-                if (/img\.youtube\.com/i.test(albumCover) || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(albumCover)) {
-                    return `<div class="vibe-artist-hero"><img class="vibe-artist-cover-img" src="${escapeHtml(albumCover)}" alt="" /></div>`;
-                }
-            }
-            const label = escapeHtml(artistName || 'This one');
-            return `<div class="vibe-artist-hero vibe-artist-hero--placeholder" aria-hidden="true"><span class="vibe-artist-placeholder-text">${label}</span></div>`;
-        }
-
         function renderResultsStep() {
             const r = vibeState.rec || {};
             const a = r.artist || {};
@@ -962,7 +939,6 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
             const trails = Array.isArray(r.searchTrails) ? r.searchTrails : [];
             const urls = Array.isArray(r.searchUrls) ? r.searchUrls : [];
             const emo = vibeState.primaryEmotion ? `<p class="vibe-emotion-label"><em>${escapeHtml(vibeState.primaryEmotion)}</em></p>` : '';
-            const hero = buildArtistHeroHtml(a);
             const songLine = escapeHtml(a.song || '—');
             const nameMuted = escapeHtml(a.name || '');
             const trailsHtml = [0, 1, 2]
@@ -979,8 +955,7 @@ Return full JSON: primaryEmotion, artist, art1, art2, searchTrails, searchUrls.`
                         <button type="button" class="vibe-favorite-btn" data-vibe-favorite="artist" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="artist" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner vibe-card-inner--artist" id="vibe-card-artist-inner">
-                            <p class="vibe-card-kicker">Artist</p>
-                            ${hero}
+                            <p class="vibe-card-kicker">Music</p>
                             <p class="vibe-artist-songline">${songLine}</p>
                             <p class="vibe-artist-nameline">${nameMuted}</p>
                             <p class="vibe-card-body vibe-card-body--friend">${escapeHtml(a.reason || '')}</p>
