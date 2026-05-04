@@ -1665,6 +1665,14 @@ a.secondary-btn:hover {
     color: rgba(255, 255, 255, 0.65);
     margin: 0 0 6px 0;
 }
+.vibe-art-works-line {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.92);
+    margin: 0 0 8px 0;
+    line-height: 1.35;
+}
 .vibe-q-block {
     margin-bottom: 18px;
 }

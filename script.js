@@ -21,6 +21,7 @@ import {
     serverTimestamp
 } from './firebase.js';
 import {
+    CURATOR_ARTISTS,
     buildVibeStep1FullPrompt,
     buildVibeStep2FullPrompt,
     buildVibeStep2RetryFullPrompt,
@@ -47,6 +48,78 @@ function resolveYoutubeSongUrl(url, fallbackQuery) {
 
 function youtubeHost(h) {
     return h === 'youtube.com' || h === 'm.youtube.com' || h === 'music.youtube.com';
+}
+
+function isLikelyYoutubeVideoId(v) {
+    return typeof v === 'string' && /^[\w-]{11}$/.test(v.trim());
+}
+
+function normalizeNameLoose(s) {
+    return String(s || '')
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[^\w\s*']/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function resolveCuratorArtistPick(raw) {
+    const t = String(raw || '').trim();
+    if (!t) {
+        console.warn('MyMotif: missing curatorArtistPick → Summrs');
+        return 'Summrs';
+    }
+    const exact = CURATOR_ARTISTS.find((a) => a === t);
+    if (exact) return exact;
+    const tl = t.toLowerCase();
+    const ci = CURATOR_ARTISTS.find((a) => a.toLowerCase() === tl);
+    if (ci) return ci;
+    const nt = normalizeNameLoose(t);
+    const loose = CURATOR_ARTISTS.find((a) => normalizeNameLoose(a) === nt);
+    if (loose) return loose;
+    const partial = CURATOR_ARTISTS.find(
+        (a) =>
+            nt.includes(normalizeNameLoose(a)) ||
+            normalizeNameLoose(a).includes(nt) ||
+            tl.includes(a.toLowerCase()) ||
+            a.toLowerCase().includes(tl)
+    );
+    if (partial) return partial;
+    console.warn('MyMotif: curatorArtistPick not in list:', raw, '→ Summrs');
+    return 'Summrs';
+}
+
+function trackMatchesCuratorPick(track, canonicalArtist) {
+    const pick = normalizeNameLoose(canonicalArtist);
+    const artists = track?.artists || [];
+    return artists.some((x) => {
+        const n = normalizeNameLoose(x.name);
+        return n === pick || n.includes(pick) || pick.includes(n);
+    });
+}
+
+function buildSpotifySearchQueryForCurator(canonicalArtist, moodKeywords) {
+    const kw = String(moodKeywords || '').trim();
+    const esc = String(canonicalArtist || '').replace(/"/g, '').trim();
+    if (!esc) return kw || 'Summrs';
+    return kw ? `artist:"${esc}" ${kw}` : `artist:"${esc}"`;
+}
+
+function buildArtSpecificSearchQuery(art) {
+    const wt = String(art?.workTitle || '').trim();
+    const cr = String(art?.creatorName || '').trim();
+    const med = String(art?.medium || art?.type || '').trim();
+    const fb = String(art?.fallbackSearchQuery || '').trim();
+    if (fb) return fb;
+    if (wt && cr) return `"${wt.replace(/"/g, '')}" ${cr} ${med}`.trim();
+    return String(art?.youtubeSearchQuery || '').trim();
+}
+
+function pickArtPrimaryFindUrl(art) {
+    const direct = String(art?.findUrl || '').trim();
+    if (direct && urlPassesArtFindPolicy(direct)) return direct;
+    const q = buildArtSpecificSearchQuery(art);
+    return `https://www.google.com/search?q=${encodeURIComponent(q || 'installation sculpture')}`;
 }
 
 /** Unique id per vibe run so Groq treats each journal click as a fresh curation. */
@@ -86,13 +159,21 @@ function urlPassesArtFindPolicy(url) {
     try {
         const u = new URL(url);
         const h = u.hostname.replace(/^www\./, '');
-        /* Art cards use YouTube **search results** only (no invented watch URLs). */
+        /* Video art / short film: direct watch links allowed when video id looks valid. */
         if (youtubeHost(h)) {
             if (u.pathname.startsWith('/results')) return true;
             if (u.searchParams.has('search_query')) return true;
+            if (u.pathname === '/watch' && isLikelyYoutubeVideoId(u.searchParams.get('v') || '')) return true;
+            if (u.pathname.startsWith('/shorts/')) {
+                const id = u.pathname.replace(/^\/shorts\//, '').split('/')[0];
+                if (isLikelyYoutubeVideoId(id)) return true;
+            }
             return false;
         }
-        if (u.hostname === 'youtu.be') return false;
+        if (u.hostname === 'youtu.be') {
+            const id = u.pathname.replace(/^\//, '').split('/')[0];
+            return isLikelyYoutubeVideoId(id);
+        }
         if (h === 'vimeo.com') {
             if (u.pathname.startsWith('/search')) return true;
             if (/^\/\d+(?:\/|$)/.test(u.pathname)) return true;
@@ -107,6 +188,11 @@ function urlPassesArtFindPolicy(url) {
         if (knownLive.includes(h)) return true;
         if (h === 'instagram.com' && /^\/(p|reel|tv)\/[\w-]+/.test(u.pathname)) return true;
         if (creativePortfolioHost(h)) return true;
+        if (h === 'letterboxd.com' && /\/film\//.test(u.pathname)) return true;
+        if (h === 'medium.com' && /^\/[\w-]+\/[\w-]+/.test(u.pathname)) return true;
+        if (h.endsWith('.substack.com') && /^\/p\/[\w-]+/.test(u.pathname)) return true;
+        if (h === 'newgrounds.com' && /^\/portal\/view\//.test(u.pathname)) return true;
+        if ((h === 'itch.io' || h.endsWith('.itch.io')) && u.pathname.length > 1) return true;
         return false;
     } catch {
         return false;
@@ -115,30 +201,7 @@ function urlPassesArtFindPolicy(url) {
 
 function coerceArtFindUrl(art) {
     if (!art || typeof art !== 'object') return;
-    const fallbackQ = `${art.name || ''} ${art.type || ''}`.trim() || art.name || 'art';
-    let url = String(art.findUrl || '').trim();
-    try {
-        if (url) {
-            const u = new URL(url);
-            const h = u.hostname.replace(/^www\./, '');
-            const qArt = String(art.youtubeSearchQuery || fallbackQ).trim();
-            if (youtubeHost(h) && u.pathname === '/watch') {
-                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(qArt)}`;
-                return;
-            }
-            if (u.hostname === 'youtu.be') {
-                art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(qArt)}`;
-                return;
-            }
-        }
-    } catch {
-        art.findUrl = '';
-        url = '';
-    }
-    url = String(art.findUrl || '').trim();
-    if (url && urlPassesArtFindPolicy(url)) return;
-    const q = String(art.youtubeSearchQuery || fallbackQ).trim();
-    art.findUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+    art.findUrl = pickArtPrimaryFindUrl(art);
 }
 
 function normalizeRecommendationUrls(rec) {
@@ -338,6 +401,29 @@ async function resolveTrackFromSearchQuery(spotifySearchQuery) {
     return { track, usedQuery: q, source: 'itunes' };
 }
 
+/** Prefer a track whose primary artist matches the curator pick (from allowed list). */
+async function resolveTrackForCurator(rawCuratorPick, moodKeywords) {
+    const canon = resolveCuratorArtistPick(rawCuratorPick);
+    const kw = String(moodKeywords || '').trim();
+    const attempts = [
+        buildSpotifySearchQueryForCurator(canon, kw),
+        `${canon.replace(/\*/g, '')} ${kw}`.trim(),
+        canon
+    ];
+    for (const q of attempts) {
+        try {
+            const r = await resolveTrackFromSearchQuery(q);
+            if (trackMatchesCuratorPick(r.track, canon)) {
+                return { ...r, usedQuery: q, curatorArtist: canon };
+            }
+        } catch (e) {
+            console.warn('MyMotif: curator track attempt failed:', q, e && e.message);
+        }
+    }
+    const fallback = await resolveTrackFromSearchQuery(attempts[0]);
+    return { ...fallback, usedQuery: attempts[0], curatorArtist: canon };
+}
+
 function buildYoutubeResultsUrl(searchQuery) {
     const q = String(searchQuery || '').trim() || 'visual art';
     return `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
@@ -365,12 +451,33 @@ ${entryText}
 Real track returned by ${src} search (query: "${used}"):
 ${trackFacts}
 
-Your step-1 YouTube search directions (results pages, not specific videos):
-- art1: type="${step1.art1?.type || ''}" youtubeSearchQuery="${step1.art1?.youtubeSearchQuery || ''}"
-- art2: type="${step1.art2?.type || ''}" youtubeSearchQuery="${step1.art2?.youtubeSearchQuery || ''}"`;
+Step-1 art targets (specific work + creator + medium):
+- art1: medium="${step1.art1?.medium || ''}" workTitle="${step1.art1?.workTitle || ''}" creatorName="${step1.art1?.creatorName || ''}" findUrl="${step1.art1?.findUrl || ''}" fallbackSearchQuery="${step1.art1?.fallbackSearchQuery || ''}"
+- art2: medium="${step1.art2?.medium || ''}" workTitle="${step1.art2?.workTitle || ''}" creatorName="${step1.art2?.creatorName || ''}" findUrl="${step1.art2?.findUrl || ''}" fallbackSearchQuery="${step1.art2?.fallbackSearchQuery || ''}"`;
 }
 
-function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery) {
+function packArtSlot(step1Art, step2Reason, scoreNum) {
+    const sc = Number(scoreNum);
+    const slot = {
+        label: String(step1Art?.label || 'Art').trim(),
+        name: String(step1Art?.label || 'Art').trim(),
+        type: String(step1Art?.type || '').trim(),
+        medium: String(step1Art?.medium || '').trim(),
+        workTitle: String(step1Art?.workTitle || '').trim(),
+        creatorName: String(step1Art?.creatorName || '').trim(),
+        fallbackSearchQuery: String(step1Art?.fallbackSearchQuery || '').trim(),
+        findUrl: String(step1Art?.findUrl || '').trim(),
+        reason: String(step2Reason || '').trim(),
+        matchScore: Number.isFinite(sc) ? sc : null,
+        youtubeSearchQuery: ''
+    };
+    slot.youtubeSearchQuery =
+        buildArtSpecificSearchQuery(slot) || String(step1Art?.youtubeSearchQuery || '').trim();
+    coerceArtFindUrl(slot);
+    return slot;
+}
+
+function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery, curatorCanonical) {
     const artistName = track.artists?.[0]?.name || 'Unknown';
     const songTitle = track.name || '—';
     const spotifyOpen =
@@ -389,28 +496,13 @@ function buildRecFromPipeline(step1, track, step2, usedSpotifyQuery) {
             matchScore: Number.isFinite(mScore) ? mScore : null,
             searchUrl: spotifyOpen,
             spotifySearchQuery: usedSpotifyQuery,
+            curatorArtistPick: curatorCanonical || '',
             songYoutubeUrl: buildYoutubeResultsUrl(listenQ),
             songSoundcloudUrl: `https://soundcloud.com/search/sounds?q=${encodeURIComponent(listenQ)}`,
             albumCover: track.album?.images?.[0]?.url || null
         },
-        art1: {
-            label: String(step1.art1?.label || 'Art').trim(),
-            name: String(step1.art1?.label || 'Art').trim(),
-            type: String(step1.art1?.type || '').trim(),
-            reason: String(step2.art1Reason || '').trim(),
-            matchScore: Number.isFinite(a1s) ? a1s : null,
-            youtubeSearchQuery: String(step1.art1?.youtubeSearchQuery || '').trim(),
-            findUrl: buildYoutubeResultsUrl(step1.art1?.youtubeSearchQuery)
-        },
-        art2: {
-            label: String(step1.art2?.label || 'More art').trim(),
-            name: String(step1.art2?.label || 'More art').trim(),
-            type: String(step1.art2?.type || '').trim(),
-            reason: String(step2.art2Reason || '').trim(),
-            matchScore: Number.isFinite(a2s) ? a2s : null,
-            youtubeSearchQuery: String(step1.art2?.youtubeSearchQuery || '').trim(),
-            findUrl: buildYoutubeResultsUrl(step1.art2?.youtubeSearchQuery)
-        },
+        art1: packArtSlot(step1.art1, step2.art1Reason, a1s),
+        art2: packArtSlot(step1.art2, step2.art2Reason, a2s),
         searchTrails: Array.isArray(step1.searchTrails) ? step1.searchTrails : [],
         searchUrls: []
     };
@@ -1152,6 +1244,9 @@ const initApp = async () => {
                           label: art.label || art.name,
                           name: art.name,
                           type: art.type,
+                          medium: art.medium,
+                          workTitle: art.workTitle,
+                          creatorName: art.creatorName,
                           reason: cut(art.reason),
                           findUrl: art.findUrl,
                           youtubeSearchQuery: art.youtubeSearchQuery,
@@ -1170,7 +1265,8 @@ const initApp = async () => {
                           reason: cut(a.reason),
                           searchUrl: a.searchUrl,
                           matchScore: a.matchScore,
-                          spotifySearchQuery: a.spotifySearchQuery
+                          spotifySearchQuery: a.spotifySearchQuery,
+                          curatorArtistPick: a.curatorArtistPick
                       }
                     : undefined,
                 art1: pack(rec.art1),
@@ -1204,18 +1300,21 @@ ${entryText}
             });
             const step1 = parseVibeJsonFromResponse(data1);
             if (!step1 || typeof step1 !== 'object') throw new Error('Invalid step-1 model response.');
-            const sq = String(step1.spotifySearchQuery || '').trim();
-            if (!sq) throw new Error('Model returned no spotifySearchQuery.');
-            if (!step1.art1?.youtubeSearchQuery || !step1.art2?.youtubeSearchQuery) {
-                throw new Error('Model returned incomplete art search queries.');
+            const canon = resolveCuratorArtistPick(step1.curatorArtistPick);
+            const mood = String(step1.spotifyMoodKeywords ?? '').trim();
+            if (!String(step1.art1?.workTitle || '').trim() || !String(step1.art2?.workTitle || '').trim()) {
+                throw new Error('Each art slot needs a specific workTitle (named piece). Try again.');
+            }
+            if (!String(step1.art1?.creatorName || '').trim() || !String(step1.art2?.creatorName || '').trim()) {
+                throw new Error('Each art slot needs creatorName (artist / director / author). Try again.');
             }
 
-            let { track, usedQuery, source } = await resolveTrackFromSearchQuery(sq);
+            let { track, usedQuery, source } = await resolveTrackForCurator(step1.curatorArtistPick, mood);
             let step2 = await runExplainStep(entryText, track, step1, { source, usedQuery });
 
             if (Number(step2.musicMatchScore) < 6 && String(step2.refinedSpotifyQuery || '').trim()) {
-                const refined = String(step2.refinedSpotifyQuery).trim();
-                const second = await resolveTrackFromSearchQuery(refined);
+                const refinedMood = String(step2.refinedSpotifyQuery).trim();
+                const second = await resolveTrackForCurator(step1.curatorArtistPick, refinedMood);
                 track = second.track;
                 usedQuery = second.usedQuery;
                 source = second.source;
@@ -1223,7 +1322,7 @@ ${entryText}
                     source,
                     usedQuery,
                     extraNote:
-                        'This is after ONE refined Spotify/iTunes search. In your JSON set refinedSpotifyQuery to null.'
+                        'After ONE refined mood search (same curator artist). Set refinedSpotifyQuery to null.'
                 });
                 const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
                     temperature: 0.72,
@@ -1232,7 +1331,7 @@ ${entryText}
                 step2 = parseVibeJsonFromResponse(dataRetry);
             }
 
-            return buildRecFromPipeline(step1, track, step2, usedQuery);
+            return buildRecFromPipeline(step1, track, step2, usedQuery, canon);
         }
 
         async function runVibeReshuffle(kind, avoidName) {
@@ -1240,46 +1339,56 @@ ${entryText}
             const rec = vibeState.rec;
             if (!rec || typeof rec !== 'object') return;
 
+            const artSlotToStep1 = (slot) => ({
+                label: slot?.label,
+                type: slot?.type,
+                medium: slot?.medium,
+                workTitle: slot?.workTitle,
+                creatorName: slot?.creatorName,
+                findUrl: slot?.findUrl,
+                fallbackSearchQuery: slot?.fallbackSearchQuery,
+                youtubeSearchQuery: slot?.youtubeSearchQuery
+            });
+
             if (kind === 'artist') {
                 const session = vibeSessionStamp();
-                const prevQ = String(rec.artist?.spotifySearchQuery || '');
+                const allowed = CURATOR_ARTISTS.join(', ');
                 const userP = `SESSION: ${session}
+
+ALLOWED ARTISTS (pick exactly one string from this list when returning curatorArtistPick):
+${allowed}
 
 Journal:
 ---
 ${entryText}
 ---
 
-Previous spotifySearchQuery (pick a clearly different angle): ${prevQ || '(none)'}
-Avoid repeating that query or mimicking: "${avoidName}"`;
+Previous curatorArtistPick: ${rec.artist?.curatorArtistPick || ''}
+Previous search used: ${rec.artist?.spotifySearchQuery || ''}
+
+Pick a **different** artist from the allowed list + new mood keywords. Avoid mimicking: "${avoidName}"`;
 
                 const data = await groqChatCompletion(buildVibeReshuffleMusicFullPrompt(userP), {
                     temperature: 0.9,
                     max_tokens: 512
                 });
                 const j = parseVibeJsonFromResponse(data);
-                const nq = String(j.spotifySearchQuery || '').trim();
-                if (!nq) throw new Error('No new spotifySearchQuery from model.');
+                const newPickRaw = j.curatorArtistPick;
+                const mood = String(j.spotifyMoodKeywords ?? '').trim();
+                if (!newPickRaw || !mood) throw new Error('Reshuffle needs curatorArtistPick and spotifyMoodKeywords.');
+                const newCanon = resolveCuratorArtistPick(newPickRaw);
 
-                let { track, usedQuery, source } = await resolveTrackFromSearchQuery(nq);
+                let { track, usedQuery, source } = await resolveTrackForCurator(newPickRaw, mood);
                 const step1Preserve = {
                     primaryEmotion: vibeState.primaryEmotion,
-                    art1: {
-                        label: rec.art1?.label,
-                        type: rec.art1?.type,
-                        youtubeSearchQuery: rec.art1?.youtubeSearchQuery
-                    },
-                    art2: {
-                        label: rec.art2?.label,
-                        type: rec.art2?.type,
-                        youtubeSearchQuery: rec.art2?.youtubeSearchQuery
-                    },
+                    art1: artSlotToStep1(rec.art1),
+                    art2: artSlotToStep1(rec.art2),
                     searchTrails: rec.searchTrails
                 };
                 let step2 = await runExplainStep(entryText, track, step1Preserve, { source, usedQuery });
                 if (Number(step2.musicMatchScore) < 6 && String(step2.refinedSpotifyQuery || '').trim()) {
-                    const refined = String(step2.refinedSpotifyQuery).trim();
-                    const second = await resolveTrackFromSearchQuery(refined);
+                    const refinedMood = String(step2.refinedSpotifyQuery).trim();
+                    const second = await resolveTrackForCurator(newPickRaw, refinedMood);
                     track = second.track;
                     usedQuery = second.usedQuery;
                     source = second.source;
@@ -1287,7 +1396,7 @@ Avoid repeating that query or mimicking: "${avoidName}"`;
                         source,
                         usedQuery,
                         extraNote:
-                            'Refined search pass (final). Set refinedSpotifyQuery to null in your JSON output.'
+                            'Refined mood pass (final). Set refinedSpotifyQuery to null in your JSON output.'
                     });
                     const dataRetry = await groqChatCompletion(buildVibeStep2RetryFullPrompt(retryTask), {
                         temperature: 0.72,
@@ -1295,7 +1404,7 @@ Avoid repeating that query or mimicking: "${avoidName}"`;
                     });
                     step2 = parseVibeJsonFromResponse(dataRetry);
                 }
-                vibeState.rec = buildRecFromPipeline(step1Preserve, track, step2, usedQuery);
+                vibeState.rec = buildRecFromPipeline(step1Preserve, track, step2, usedQuery, newCanon);
                 return;
             }
 
@@ -1309,10 +1418,10 @@ Journal:
 ${entryText}
 ---
 
-Reshuffle **${kind}** only.
-Previous label: ${prevSlot?.label || ''}
-Previous youtubeSearchQuery: ${prevSlot?.youtubeSearchQuery || ''}
-Other art slot query (stay different): ${other?.youtubeSearchQuery || ''}
+Reshuffle **${kind}** only — name a **different specific** work + creator + medium (interactive web, short film, writing, sculpture, installation, etc.).
+Previous workTitle: ${prevSlot?.workTitle || ''}
+Previous creatorName: ${prevSlot?.creatorName || ''}
+Other slot (stay different): ${other?.workTitle || ''} / ${other?.creatorName || ''}
 Avoid repeating: "${avoidName}"`;
 
             const data = await groqChatCompletion(buildVibeReshuffleArtFullPrompt(userP), {
@@ -1320,18 +1429,22 @@ Avoid repeating: "${avoidName}"`;
                 max_tokens: 1024
             });
             const j = parseVibeJsonFromResponse(data);
-            const yq = String(j.youtubeSearchQuery || '').trim();
-            if (!yq) throw new Error('No youtubeSearchQuery from model.');
             const lbl = String(j.label || 'Art').trim();
             const patch = {
                 label: lbl,
                 name: lbl,
                 type: String(j.type || '').trim(),
-                youtubeSearchQuery: yq,
+                medium: String(j.medium || '').trim(),
+                workTitle: String(j.workTitle || '').trim(),
+                creatorName: String(j.creatorName || '').trim(),
+                findUrl: String(j.findUrl || '').trim(),
+                fallbackSearchQuery: String(j.fallbackSearchQuery || '').trim(),
+                youtubeSearchQuery: String(j.youtubeSearchQuery || '').trim(),
                 reason: String(j.reason || '').trim(),
-                matchScore: Number.isFinite(Number(j.artMatchScore)) ? Number(j.artMatchScore) : null,
-                findUrl: buildYoutubeResultsUrl(yq)
+                matchScore: Number.isFinite(Number(j.artMatchScore)) ? Number(j.artMatchScore) : null
             };
+            patch.youtubeSearchQuery =
+                buildArtSpecificSearchQuery(patch) || patch.youtubeSearchQuery;
             coerceArtFindUrl(patch);
             if (kind === 'art1') {
                 rec.art1 = { ...rec.art1, ...patch };
@@ -1363,6 +1476,8 @@ Avoid repeating: "${avoidName}"`;
                 s != null && s !== ''
                     ? `<p class="vibe-match-score vibe-match-score--small">${escapeHtml(String(s))}/10</p>`
                     : '';
+            const art1WorkLine = [art1.workTitle, art1.creatorName].filter(Boolean).join(' — ');
+            const art2WorkLine = [art2.workTitle, art2.creatorName].filter(Boolean).join(' — ');
             const trailsHtml = [0, 1, 2]
                 .map((i) => {
                     const t = trails[i] || '—';
@@ -1393,22 +1508,24 @@ Avoid repeating: "${avoidName}"`;
                         <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art1" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art1" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art1-inner">
-                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.type || '')}</span></p>
+                            <p class="vibe-card-kicker">Art <span class="vibe-type-tag">${escapeHtml(art1.medium || art1.type || '')}</span></p>
                             <p class="vibe-card-title">${escapeHtml(art1.label || art1.name || '—')}</p>
+                            ${art1WorkLine ? `<p class="vibe-art-works-line">${escapeHtml(art1WorkLine)}</p>` : ''}
                             ${artScore(art1.matchScore)}
                             <p class="vibe-card-body">${escapeHtml(art1.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">YouTube search</button>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art1">Open link</button>
                         </div>
                     </div>
                     <div class="vibe-rec-card" data-card="art2">
                         <button type="button" class="vibe-favorite-btn" data-vibe-favorite="art2" title="Save to favorites"><i class="fa-regular fa-heart"></i></button>
                         <button type="button" class="vibe-reshuffle" data-reshuffle="art2" title="Reshuffle">🔀</button>
                         <div class="vibe-card-inner" id="vibe-card-art2-inner">
-                            <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.type || '')}</span></p>
+                            <p class="vibe-card-kicker">More art <span class="vibe-type-tag">${escapeHtml(art2.medium || art2.type || '')}</span></p>
                             <p class="vibe-card-title">${escapeHtml(art2.label || art2.name || '—')}</p>
+                            ${art2WorkLine ? `<p class="vibe-art-works-line">${escapeHtml(art2WorkLine)}</p>` : ''}
                             ${artScore(art2.matchScore)}
                             <p class="vibe-card-body">${escapeHtml(art2.reason || '')}</p>
-                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">YouTube search</button>
+                            <button type="button" class="secondary-btn vibe-open-btn" data-vibe-link="art2">Open link</button>
                         </div>
                     </div>
                 </div>

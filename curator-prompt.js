@@ -1,4 +1,4 @@
-/** Mood vocabulary (optional context for search-query tone — do not use as track names in step 1). */
+/** Closed universe for music — Spotify/iTunes search MUST stay inside this list (exact strings matter). */
 export const CURATOR_ARTISTS = [
     "Pz'",
     'Tezzus',
@@ -56,44 +56,47 @@ export const CURATOR_ARTISTS = [
     'Summrs'
 ];
 
-/** Step 1 — journal → search queries only (no invented songs or videos). */
+/** Step 1 — journal → curator artist + mood keywords + specific art targets (no invented songs). */
 export function buildVibeStep1SystemPrompt() {
-    const artistLine = CURATOR_ARTISTS.slice(0, 24).join(', ');
-    return `You are the **first stage** of a journal discovery pipeline. You NEVER output song titles, artist names, album names, music video titles, or specific YouTube video names. Those will come from real APIs and search pages.
+    const allowedBlock = CURATOR_ARTISTS.map((a) => `- ${a}`).join('\n');
+    return `You are the **first stage** of a journal discovery pipeline.
 
-Your job: read the journal, infer emotion, and write **search queries** that other systems will run:
-- **Spotify** will run \`spotifySearchQuery\` and return a **real** track (you do not choose which).
-- **YouTube** will open **search results pages** from \`youtubeSearchQuery\` strings — the user sees real thumbnails/results (you do not name a video).
+## MUSIC (hard rule)
+- You MUST set \`curatorArtistPick\` to **exactly one** name from the ALLOWED list below — copy/paste the spelling **exactly** (including punctuation like * or ').
+- You MUST NOT invent song titles. The app searches Spotify/iTunes using **that artist** plus your mood keywords.
+- \`spotifyMoodKeywords\`: 3–12 words — texture, mood, era, situation, **no** artist names and **no** song titles.
 
-Mood / scene reference (vocabulary only, not for naming tracks): ${artistLine}
+ALLOWED ARTISTS (pick exactly one string from this list):
+${allowedBlock}
 
-EMOTIONAL SCENE (align spotifySearchQuery + art direction, not specific songs):
-1 LONGING / DISSOCIATION — soft distance, night, numb
-2 PARANOIA / SURVIVAL — tense, loyal, pressure
-3 IDENTITY / FASHION / DIASPORA — style, prove, seen
-4 DARK / RAGE / DETACH — void, chaos, alone
-5 INTERNET / ABSURD — weird, surreal, ironic
-6 STREET / REGIONAL — city, block, pride
-7 RAW / SOUTHERN GOTHIC — pain, spirit, unfiltered
-8 FLEX / COME-UP — win, motion, celebration
+## ART (hard rule — specificity over generic “vibes”)
+Each art slot must name a **concrete** category and target — not a vague genre search:
+- **interactive website** — a known or plausible **named** interactive / net-art / creative-code piece or tool (prefer direct URL if you know it).
+- **short film / moving image** — a **specific** film/video title + director/collective (1-of-1 / festival / Vimeo legacy energy — not a random music promo).
+- **writing** — a **specific** essay, poem, story, or publication **title** + author/editorial venue.
+- **sculpture / painting / installation / photography** — **specific work title** + **specific artist** (museum/collection/gallery context).
 
-ART YOUTUBE QUERIES (critical):
-- \`art1\` and \`art2\` must be **visual** discovery paths: fashion runway, lookbook, sculpture, painting, photography, **niche interactive / design / portfolio** terms, museum, editorial.
-- **Never** make art queries duplicate the music lane as an "official music video" for a track you are imagining. Art is **not** the same as the song's promo video.
-- \`art1.type\` and \`art2.type\` must differ (e.g. "fashion runway" vs "interactive web" vs "painting" vs "sculpture").
+Slots **must differ in medium**: e.g. one interactive web, one installation OR short film OR writing — never two vague “art aesthetic” searches.
 
-searchTrails: 3 multi-word research queries; one should mention Genius or Reddit; they deepen context (not duplicate spotifySearchQuery verbatim).`;
+For each slot fill:
+- \`workTitle\` — the specific piece/publication/film/site **name** (not generic).
+- \`creatorName\` — artist, director, writer, designer, or studio.
+- \`medium\` — one of: interactive web | short film | writing | sculpture | painting | installation | photography | fashion film | other (pick precise labels).
+- \`findUrl\` — **preferred** HTTPS link directly to that piece (museum object page, Vimeo video, journal article, artist project page, portfolio single-work page). If you are **not** confident the URL is real, set \`findUrl\` to "" and rely on \`fallbackSearchQuery\`.
+- \`fallbackSearchQuery\` — a **tight** search string: quoted work title + creator + medium (for Google / YouTube results when no safe direct link).
+
+Never output generic queries like "dark aesthetic abstract art". Always anchor **title + creator**.`;
 }
 
 export function buildVibeStep1OutputContract() {
     return `OUTPUT: Valid JSON only. No markdown or preamble.
 
-{"primaryEmotion":"","feelingSummary":"","spotifySearchQuery":"","art1":{"label":"","type":"","youtubeSearchQuery":""},"art2":{"label":"","type":"","youtubeSearchQuery":""},"searchTrails":["","",""]}
+{"primaryEmotion":"","feelingSummary":"","curatorArtistPick":"","spotifyMoodKeywords":"","art1":{"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":""},"art2":{"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":""},"searchTrails":["","",""]}
 
 Rules:
-- \`feelingSummary\`: one sentence (emotional read of the journal).
-- \`spotifySearchQuery\`: 4–14 words, mood + texture + era + regional/underground rap **vibe** for Spotify search. **No** specific song or artist names.
-- \`art1\` / \`art2\`: \`label\` = short card title (not a video title). \`youtubeSearchQuery\` = what to type into YouTube search (real results only). **Different** visual angles; never the same query as the other.`;
+- \`curatorArtistPick\` must match **exactly** one entry from ALLOWED ARTISTS in the system prompt.
+- \`art1.youtubeSearchQuery\` / \`art2.youtubeSearchQuery\` — optional; if set, must be **specific** (\`"Work Title" creator medium\`) for YouTube **search results**, not one-word vibes.
+- \`searchTrails\`: 3 research queries; one mentions Genius or Reddit.`;
 }
 
 export function buildVibeStep1FullPrompt(userTaskText) {
@@ -104,16 +107,16 @@ export function buildVibeStep1FullPrompt(userTaskText) {
 export function buildVibeStep2SystemPrompt() {
     return `You are the **second stage**. You receive:
 1. The user's journal (verbatim).
-2. **Facts** about ONE real track returned by Spotify/iTunes search (JSON). You did NOT invent this track — it exists.
+2. **Facts** about ONE real track returned by Spotify/iTunes search (JSON). The track is by an artist from the allowed curator list search — it exists.
 
 Your job:
-- \`artistReason\`: **2–4 sentences.** Explain why **this specific track** fits **their** journal. Ground it in **their** words or situations (**direct quotes OK if short**, 1–2 fragments — never paste the entire journal back verbatim).
-- \`musicMatchScore\`: integer **1–10** — how well the track matches the journal (be honest).
-- If \`musicMatchScore\` is **below 6**, set \`refinedSpotifyQuery\` to **one** improved search query (different angle, still no fake song titles). Otherwise \`null\`.
-- \`art1Reason\` / \`art2Reason\`: explain why those **YouTube search directions** (given below) are right for this journal — cite specifics; do **not** name a specific video title as if it exists.
-- \`art1MatchScore\` / \`art2MatchScore\`: integers 1–10 for how well each search direction fits.
+- \`artistReason\`: **2–4 sentences.** Why **this track** fits **their** journal. Short quotes from the journal OK (not the full entry).
+- \`musicMatchScore\`: integer **1–10**.
+- If \`musicMatchScore\` < 6, set \`refinedSpotifyQuery\` to **one** improved query: still **only** mood/texture words (no fake titles). The app will combine it with the same curator artist. Otherwise \`null\`.
+- \`art1Reason\` / \`art2Reason\`: explain why **those specific works / creators / media** (named in step 1) connect to the journal — not generic “good art” or vague aesthetics.
+- \`art1MatchScore\` / \`art2MatchScore\`: 1–10.
 
-Forbidden: claiming you "picked" the track before the API, inventing different track names, or saying you searched YouTube.`;
+Forbidden: inventing songs, claiming you chose the Spotify result before the API, inventing URLs, or naming films/essays you did not verify exist.`;
 }
 
 export function buildVibeStep2OutputContract() {
@@ -131,15 +134,15 @@ export function buildVibeReshuffleMusicFullPrompt(userTaskText) {
 }
 
 function buildVibeReshuffleMusicSystem() {
-    return `Output ONLY valid JSON. The user wants a **different musical angle** for the same journal.
+    return `Output ONLY valid JSON. The user wants a **different** music direction while staying inside the **ALLOWED ARTISTS** list.
 
-You must output a NEW \`spotifySearchQuery\` — different vocabulary/direction from before — still **no invented song or artist names**. The app will run Spotify/iTunes search again.
+Pick a **different** \`curatorArtistPick\` (exact string from the list in USER TASK) and fresh \`spotifyMoodKeywords\` (no song titles).
 
-Forbidden: repeating the previous query verbatim or choosing a specific track title.`;
+Forbidden: invented track names; repeating the previous artist + keywords verbatim.`;
 }
 
 function buildVibeReshuffleMusicContract() {
-    return `OUTPUT: {"spotifySearchQuery":""}`;
+    return `OUTPUT: {"curatorArtistPick":"","spotifyMoodKeywords":""}`;
 }
 
 export function buildVibeReshuffleArtFullPrompt(userTaskText) {
@@ -147,13 +150,13 @@ export function buildVibeReshuffleArtFullPrompt(userTaskText) {
 }
 
 function buildVibeReshuffleArtSystem() {
-    return `Output ONLY valid JSON. The user reshuffled **one** art card. Propose a **new** \`youtubeSearchQuery\` for that slot (visual / fashion / art / design — not a music video for the track). Also write a fresh \`label\` and \`reason\` (2–3 sentences) tied to the journal with **specific** language; do not dump the full journal.`;
+    return `Output ONLY valid JSON. User reshuffled one art slot. Propose a **new specific** piece (new workTitle + creatorName + medium) — interactive web, short film, writing, sculpture, installation, etc. Prefer a real \`findUrl\` you trust; else "" and a sharp \`fallbackSearchQuery\`. Fresh \`label\`, \`reason\` (2–3 sentences, journal-specific).`;
 }
 
 function buildVibeReshuffleArtContract() {
-    return `OUTPUT: {"label":"","type":"","youtubeSearchQuery":"","reason":"","artMatchScore":0}`;
+    return `OUTPUT: {"label":"","type":"","medium":"","workTitle":"","creatorName":"","findUrl":"","fallbackSearchQuery":"","youtubeSearchQuery":"","reason":"","artMatchScore":0}`;
 }
 
 export function buildVibeStep2RetryFullPrompt(userTaskText) {
-    return `${buildVibeStep2SystemPrompt()}\n\nNote: This is the **final** pass after a refined Spotify search. Do not output refinedSpotifyQuery again (set it null). Be fair with the score.\n\n=== USER TASK ===\n\n${userTaskText}\n\n${buildVibeStep2OutputContract()}`;
+    return `${buildVibeStep2SystemPrompt()}\n\nNote: **Final** pass after refined search. Set \`refinedSpotifyQuery\` to null.\n\n=== USER TASK ===\n\n${userTaskText}\n\n${buildVibeStep2OutputContract()}`;
 }
